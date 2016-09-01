@@ -12,8 +12,8 @@ import rocket._
 import cde.{Parameters, Field}
 
 case class DmaTestParameters(
-  val src_start: Int,
-  val dst_start: Int,
+  val src_start: BigInt,
+  val dst_start: BigInt,
   val segment_size: Int,
   val nsegments: Int,
   val src_stride: Int,
@@ -34,7 +34,9 @@ class DmaTestDriver(implicit val p: Parameters)
   val testParams = p(DmaTestKey)
   require(Seq(
       testParams.src_start,
-      testParams.dst_start,
+      testParams.dst_start).map(_ % 4 == 0).reduce(_ && _),
+    "DmaTest parameters must have 4 byte alignment")
+  require(Seq(
       testParams.segment_size,
       testParams.src_stride,
       testParams.dst_stride).map(_ % 4 == 0).reduce(_ && _),
