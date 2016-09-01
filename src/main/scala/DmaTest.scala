@@ -21,60 +21,6 @@ case class DmaTestParameters(
 
 case object DmaTestKey extends Field[DmaTestParameters]
 
-class VirtualMemAdapter(implicit val p: Parameters) extends Module
-    with HasCoreParameters
-    with HasTileLinkParameters {
-  val io = new Bundle {
-    val vmem = new ClientUncachedTileLinkIO().flip
-    val pmem = new ClientUncachedTileLinkIO
-    val ptw  = new TLBPTWIO
-  }
-
-  val tlBlockOffset = tlBeatAddrBits + tlByteAddrBits
-
-  val cur_vpn = Reg(UInt(width = vpnBits))
-  val cur_ppn = Reg(UInt(width = ppnBits))
-  val trans_valid = Reg(init = Bool(false))
-  val trans_inflight = Reg(init = Bool(false))
-
-  val req_vaddr = io.vmem.acquire.bits.full_addr()
-  val req_vpn = req_vaddr(paddrBits - 1, pgIdxBits)
-  val req_idx = req_vaddr(pgIdxBits - 1, 0)
-  val req_paddr = Cat(cur_ppn, req_idx)
-  val req_block = req_paddr(paddrBits - 1, tlBlockOffset)
-
-  val req_ok = trans_valid && cur_vpn === req_vpn
-
-  io.pmem.acquire.valid := io.vmem.acquire.valid && req_ok
-  io.vmem.acquire.ready := io.pmem.acquire.ready && req_ok
-  io.pmem.acquire.bits := io.vmem.acquire.bits
-  io.pmem.acquire.bits.addr_block := req_block
-  io.vmem.grant <> io.pmem.grant
-
-  io.ptw.req.valid := io.vmem.acquire.valid && !req_ok && !trans_inflight
-  io.ptw.req.bits.prv := UInt(0)
-  io.ptw.req.bits.pum := Bool(false)
-  io.ptw.req.bits.mxr := Bool(false)
-  io.ptw.req.bits.store := Bool(true)
-  io.ptw.req.bits.fetch := Bool(false)
-  io.ptw.req.bits.addr := req_vpn
-
-  when (io.ptw.req.fire()) {
-    trans_valid := Bool(false)
-    trans_inflight := Bool(true)
-    cur_vpn := req_vpn
-  }
-
-  when (io.ptw.resp.valid) {
-    trans_valid := Bool(true)
-    trans_inflight := Bool(false)
-    cur_ppn := io.ptw.resp.bits.pte.ppn
-  }
-
-  assert(!io.ptw.resp.valid || io.ptw.resp.bits.pte.leaf(),
-         "page table lookup is invalid")
-}
-
 class DmaTestDriver(implicit val p: Parameters)
     extends Module with HasTileLinkParameters {
 
