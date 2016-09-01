@@ -1,7 +1,7 @@
-organization := "edu.berkeley.eecs"
+organization := "edu.berkeley.cs"
 
-version := "1.0"
+version := "2.0"
 
-name := "dma"
+name := "riscv-dma"
 
 scalaVersion := "2.11.7"
