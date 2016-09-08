@@ -21,12 +21,14 @@ class WithDma extends Config(
     case NDmaTrackerMemXacts => 2
     // 3 clients (prefetch, put, get) per tracker
     case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts) * site(NDmaTrackers)
-    case DmaTrackerPipelineDepth => 4
+    case DmaTrackerPipelineDepth => site(NDmaTrackerMemXacts)
     case BuildDmaTracker => (p: Parameters) => Module(new PipelinedDmaTracker()(p))
+    case DmaAllocGet => Knob("DMA_ALLOC_GET")
     case _ => throw new CDEMatchError
   },
   knobValues = {
     case "CA_SHARE_MEM_CHANNEL" => false
+    case "DMA_ALLOC_GET" => false
   })
 
 class DmaConfig extends Config(new WithDma ++ new WithL2Cache ++ new BaseConfig)
@@ -44,12 +46,7 @@ class WithDmaTest extends Config(
       src_stride = 0,
       dst_stride = 0)
     case BuildGroundTest => (p: Parameters) => Module(new DmaTest()(p))
-    case NDmaTrackers => 1
-    case NDmaXacts => 4
-    case NDmaTrackerMemXacts => 2
-    case DmaTrackerPipelineDepth => 4
-    case BuildDmaTracker => (p: Parameters) => Module(new PipelinedDmaTracker()(p))
     case _ => throw new CDEMatchError
   })
 
-class DmaTestConfig extends Config(new WithDmaTest ++ new WithL2Cache ++ new GroundTestConfig)
+class DmaTestConfig extends Config(new WithDmaTest ++ new WithDma ++ new WithL2Cache ++ new GroundTestConfig)

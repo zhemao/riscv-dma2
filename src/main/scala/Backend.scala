@@ -294,10 +294,13 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   when (io.dma.resp.fire()) { state := s_idle }
 }
 
+case object DmaAllocGet extends Field[Boolean]
+case object DmaTrackerPipelineDepth extends Field[Int]
+
 class PipelinePacket(implicit p: Parameters)
     extends DmaBundle()(p) with HasTileLinkParameters {
   val data = UInt(width = tlDataBits)
-  val mask = UInt(width = tlDataBytes)
+  val bytes = UInt(width = log2Up(tlDataBytes))
 }
 
 class PipelinedDmaTrackerPrefetcher(implicit p: Parameters)
@@ -418,12 +421,12 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
   io.mem.acquire.bits := Get(
     client_xact_id = get_id,
     addr_block = src_block,
-    addr_beat = src_beat)
+    addr_beat = src_beat,
+    alloc = Bool(p(DmaAllocGet)))
   io.mem.grant.ready := io.pipe.ready
   io.pipe.valid := io.mem.grant.valid
   io.pipe.bits.data := io.mem.grant.bits.data >> Cat(gnt_byte_off, UInt(0, 3))
-  io.pipe.bits.mask := Mux(gnt_bytes_valid === UInt(0),
-    Acquire.fullWriteMask, (UInt(1) << gnt_bytes_valid) - UInt(1))
+  io.pipe.bits.bytes := gnt_bytes_valid - UInt(1)
   io.busy := state =/= s_idle || get_busy.orR
 }
 
@@ -449,17 +452,17 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   val state = Reg(init = s_idle)
 
   val data = Reg(UInt(width = tlDataBits))
-  val mask = Reg(UInt(width = tlDataBytes))
+  val bytes_val = Reg(UInt(width = log2Up(tlDataBytes + 1)))
 
   val put_busy = Reg(UInt(width = nDmaTrackerMemXacts), init = UInt(0))
   val put_id_onehot = PriorityEncoderOH(~put_busy)
   val put_id = OHToUInt(put_id_onehot)
 
-  val mask_size = Log2(PopCount(mask))
   val off_size = MuxCase(UInt(log2Up(tlDataBytes)),
     (0 until log2Up(tlDataBytes))
       .map(place => (dst_addr(place) -> UInt(place))))
-  val size = Mux(mask_size < off_size, mask_size, off_size)
+  val bytes_val_size = Log2(bytes_val)
+  val size = Mux(bytes_val_size < off_size, bytes_val_size, off_size)
   val storegen = new StoreGen(size, dst_addr, data, tlDataBytes)
 
   io.mem.acquire.valid := (state === s_mem_req) && !put_busy.andR
@@ -483,24 +486,24 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
 
   when (io.pipe.fire()) {
     data := io.pipe.bits.data
-    mask := io.pipe.bits.mask
+    bytes_val := io.pipe.bits.bytes +& UInt(1)
     state := s_mem_req
   }
 
   when (io.mem.acquire.fire()) {
     val true_size = UInt(1) << size
-    val new_mask = mask >> true_size
+    val new_bytes_val = bytes_val - true_size
     val new_bytes_left = bytes_left - true_size
     val new_data = data >> Cat(true_size, UInt(0, 3))
 
     bytes_left := new_bytes_left
+    bytes_val := new_bytes_val
     dst_addr := dst_addr + true_size
     data := new_data
-    mask := new_mask
 
     when (new_bytes_left === UInt(0)) {
       state := s_idle
-    } .elsewhen (new_mask === UInt(0)) {
+    } .elsewhen (new_bytes_val === UInt(0)) {
       state := s_pipe
     }
   }
@@ -508,8 +511,6 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   io.pipe.ready := state === s_pipe
   io.busy := state =/= s_idle || put_busy.orR
 }
-
-case object DmaTrackerPipelineDepth extends Field[Int]
 
 class PipelinedDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   val prefetch = Module(new PipelinedDmaTrackerPrefetcher)
