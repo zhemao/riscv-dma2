@@ -448,11 +448,11 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   val dst_byte_off = dst_addr(tlByteAddrBits - 1, 0)
   val bytes_left = Reg(UInt(width = addrBits))
 
-  val s_idle :: s_pipe :: s_mem_req :: Nil = Enum(Bits(), 3)
+  val s_idle :: s_pipe :: s_check :: s_mem_req :: Nil = Enum(Bits(), 4)
   val state = Reg(init = s_idle)
 
-  val data = Reg(UInt(width = tlDataBits))
-  val bytes_val = Reg(UInt(width = log2Up(tlDataBytes + 1)))
+  val data = Reg(UInt(width = 2 * tlDataBits))
+  val bytes_val = Reg(UInt(width = log2Up(tlDataBytes) + 1))
 
   val put_busy = Reg(UInt(width = nDmaTrackerMemXacts), init = UInt(0))
   val put_id_onehot = PriorityEncoderOH(~put_busy)
@@ -481,31 +481,36 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   when (state === s_idle && io.dma_req.valid) {
     dst_addr := io.dma_req.bits.dest
     bytes_left := io.dma_req.bits.length
+    data := UInt(0)
+    bytes_val := UInt(0)
     state := s_pipe
   }
 
   when (io.pipe.fire()) {
-    data := io.pipe.bits.data
-    bytes_val := io.pipe.bits.bytes +& UInt(1)
-    state := s_mem_req
+    data := data | (io.pipe.bits.data << Cat(bytes_val, UInt(0, 3)))
+    bytes_val := bytes_val + io.pipe.bits.bytes + UInt(1)
+    state := s_check
+  }
+
+  when (state === s_check) {
+    val off_true_size = UInt(1) << off_size
+    when (bytes_left === UInt(0)) {
+      state := s_idle
+    } .elsewhen (bytes_val < off_true_size && bytes_val < bytes_left) {
+      state := s_pipe
+    } .otherwise {
+      state := s_mem_req
+    }
   }
 
   when (io.mem.acquire.fire()) {
     val true_size = UInt(1) << size
-    val new_bytes_val = bytes_val - true_size
-    val new_bytes_left = bytes_left - true_size
-    val new_data = data >> Cat(true_size, UInt(0, 3))
 
-    bytes_left := new_bytes_left
-    bytes_val := new_bytes_val
+    bytes_val := bytes_val - true_size
+    bytes_left := bytes_left - true_size
     dst_addr := dst_addr + true_size
-    data := new_data
-
-    when (new_bytes_left === UInt(0)) {
-      state := s_idle
-    } .elsewhen (new_bytes_val === UInt(0)) {
-      state := s_pipe
-    }
+    data := data >> Cat(true_size, UInt(0, 3))
+    state := s_check
   }
 
   io.pipe.ready := state === s_pipe
