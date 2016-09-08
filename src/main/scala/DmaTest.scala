@@ -138,4 +138,12 @@ class DmaTest(implicit p: Parameters) extends GroundTest()(p)
   driver.io.busy := frontend.io.busy
   frontend.io.cpu <> driver.io.dma
   backend.io.dma <> frontend.io.dma
+
+  val timer = Module(new Timer(5000, p(NDmaXacts)))
+  timer.io.start.valid := backend.io.dma.req.fire()
+  timer.io.start.bits := backend.io.dma.req.bits.xact_id
+  timer.io.stop.valid := backend.io.dma.resp.fire()
+  timer.io.stop.bits := backend.io.dma.resp.bits.xact_id
+
+  assert(!timer.io.timeout.valid, "DMA Backend timed out")
 }
