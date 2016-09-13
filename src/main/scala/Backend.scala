@@ -31,6 +31,7 @@ class DmaRequest(implicit p: Parameters) extends DmaBundle()(p) {
   val source = UInt(width = addrBits)
   val dest = UInt(width = addrBits)
   val length = UInt(width = addrBits)
+  val alloc = UInt(width = 2)
 
   def isPrefetch(dummy: Int = 0): Bool =
     cmd === DmaRequest.DMA_CMD_PFR || cmd === DmaRequest.DMA_CMD_PFW
@@ -52,13 +53,15 @@ object DmaRequest {
             cmd: UInt,
             source: UInt,
             dest: UInt,
-            length: UInt)(implicit p: Parameters): DmaRequest = {
+            length: UInt,
+            alloc: UInt = UInt("b10"))(implicit p: Parameters): DmaRequest = {
     val req = Wire(new DmaRequest)
     req.xact_id := xact_id
     req.cmd := cmd
     req.source := source
     req.dest := dest
     req.length := length
+    req.alloc := alloc
     req
   }
 }
@@ -118,6 +121,7 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   val get_half = Reg(UInt(width = 1))
   val prefetch_put = Reg(Bool())
   val get_done = !get_inflight.orR
+  val alloc = Reg(UInt(width = 2))
 
   val src_block = Reg(UInt(width = tlBlockAddrBits))
   val dst_block = Reg(UInt(width = tlBlockAddrBits))
@@ -186,12 +190,13 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
     addr_block = dst_block,
     addr_beat = put_beat,
     data = put_data,
-    wmask = Some(put_mask))
+    wmask = Some(put_mask),
+    alloc = alloc(1))
 
   val get_acquire = GetBlock(
     client_xact_id = get_half,
     addr_block = src_block,
-    alloc = Bool(false))
+    alloc = alloc(0))
 
   val prefetch_acquire = Mux(prefetch_put,
     PutPrefetch(client_xact_id = prefetch_id, addr_block = dst_block),
@@ -228,6 +233,7 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
     put_inflight := Bool(false)
     get_half := UInt(0)
     put_half := UInt(0)
+    alloc    := io.dma.req.bits.alloc
 
     when (io.dma.req.bits.cmd === DMA_CMD_COPY) {
       state := s_get
@@ -294,7 +300,6 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   when (io.dma.resp.fire()) { state := s_idle }
 }
 
-case object DmaAllocGet extends Field[Boolean]
 case object DmaTrackerPipelineDepth extends Field[Int]
 
 class PipelinePacket(implicit p: Parameters)
@@ -386,9 +391,12 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
   val byte_offsets = Reg(Vec(nDmaTrackerMemXacts, UInt(width = tlByteAddrBits)))
   val bytes_valid = Reg(Vec(nDmaTrackerMemXacts, UInt(width = tlByteAddrBits)))
 
+  val alloc = Reg(Bool())
+
   when (state === s_idle && io.dma_req.valid) {
     src_addr := io.dma_req.bits.source
     bytes_left := io.dma_req.bits.length
+    alloc := io.dma_req.bits.alloc(0)
     state := s_mem_req
   }
 
@@ -422,7 +430,7 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
     client_xact_id = get_id,
     addr_block = src_block,
     addr_beat = src_beat,
-    alloc = Bool(p(DmaAllocGet)))
+    alloc = alloc)
   io.mem.grant.ready := io.pipe.ready
   io.pipe.valid := io.mem.grant.valid
   io.pipe.bits.data := io.mem.grant.bits.data >> Cat(gnt_byte_off, UInt(0, 3))
@@ -465,13 +473,16 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   val size = Mux(bytes_val_size < off_size, bytes_val_size, off_size)
   val storegen = new StoreGen(size, dst_addr, data, tlDataBytes)
 
+  val alloc = Reg(Bool())
+
   io.mem.acquire.valid := (state === s_mem_req) && !put_busy.andR
   io.mem.acquire.bits := Put(
     client_xact_id = put_id,
     addr_block = dst_block,
     addr_beat = dst_beat,
     data = storegen.data,
-    wmask = Some(storegen.mask))
+    wmask = Some(storegen.mask),
+    alloc = alloc)
   io.mem.grant.ready := put_busy.orR
 
   put_busy := (put_busy |
@@ -483,6 +494,7 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
     bytes_left := io.dma_req.bits.length
     data := UInt(0)
     bytes_val := UInt(0)
+    alloc := io.dma_req.bits.alloc(1)
     state := s_pipe
   }
 

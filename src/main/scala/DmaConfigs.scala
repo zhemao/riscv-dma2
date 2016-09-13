@@ -18,17 +18,16 @@ class WithDma extends Config(
     case CopyAccelShareMemChannel => Knob("CA_SHARE_MEM_CHANNEL")
     case NDmaTrackers => 1
     case NDmaXacts => 4
-    case NDmaTrackerMemXacts => 2
+    case NDmaTrackerMemXacts => 4
     // 3 clients (prefetch, put, get) per tracker
     case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts) * site(NDmaTrackers)
     case DmaTrackerPipelineDepth => site(NDmaTrackerMemXacts)
     case BuildDmaTracker => (p: Parameters) => Module(new PipelinedDmaTracker()(p))
-    case DmaAllocGet => Knob("DMA_ALLOC_GET")
+    case SimMemLatency => 20
     case _ => throw new CDEMatchError
   },
   knobValues = {
     case "CA_SHARE_MEM_CHANNEL" => false
-    case "DMA_ALLOC_GET" => false
   })
 
 class DmaConfig extends Config(new WithDma ++ new WithL2Cache ++ new BaseConfig)
@@ -40,7 +39,7 @@ class WithDmaTest extends Config(
       maxXacts = 3 * site(NDmaTrackerMemXacts) * site(NDmaTrackers)))
     case DmaTestKey => DmaTestParameters(
       src_start = 0x80000000L,
-      dst_start = 0x80001000L,
+      dst_start = 0x80001004L,
       segment_size = 0x100,
       nsegments = 1,
       src_stride = 0,

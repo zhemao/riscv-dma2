@@ -13,14 +13,15 @@ object DmaCtrlRegNumbers {
   val DST_STRIDE = 1
   val SEGMENT_SIZE = 2
   val NSEGMENTS = 3
-  val RESP_STATUS = 4
+  val ALLOC = 4
+  val RESP_STATUS = 5
 }
 import DmaCtrlRegNumbers._
 
 class DmaCtrlRegFile(implicit val p: Parameters) extends Module
     with HasClientDmaParameters with HasTileLinkParameters {
 
-  private val nRegs = 5
+  private val nRegs = 6
 
   val io = new Bundle {
     val wen = Bool(INPUT)
@@ -31,7 +32,8 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
     val src_stride = UInt(OUTPUT, dmaSegmentSizeBits)
     val dst_stride = UInt(OUTPUT, dmaSegmentSizeBits)
     val segment_size = UInt(OUTPUT, dmaSegmentSizeBits)
-    val nsegments  = UInt(OUTPUT, dmaSegmentBits)
+    val nsegments = UInt(OUTPUT, dmaSegmentBits)
+    val alloc = UInt(OUTPUT, 2)
 
     val dma_resp = Valid(new ClientDmaResponse).flip
   }
@@ -42,6 +44,7 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
   io.dst_stride := regs(DST_STRIDE)
   io.segment_size := regs(SEGMENT_SIZE)
   io.nsegments := regs(NSEGMENTS)
+  io.alloc := regs(ALLOC)
 
   when (io.wen) { regs(io.rwaddr) := io.wdata }
   when (io.dma_resp.valid) { regs(RESP_STATUS) := io.dma_resp.bits.status }
@@ -81,7 +84,8 @@ class DmaController(implicit val p: Parameters) extends Module
     src_stride = crfile.io.src_stride,
     dst_stride = crfile.io.dst_stride,
     segment_size = crfile.io.segment_size,
-    nsegments = crfile.io.nsegments)
+    nsegments = crfile.io.nsegments,
+    alloc = crfile.io.alloc)
 
   io.ptw <> frontend.io.ptw
   io.dma <> frontend.io.dma

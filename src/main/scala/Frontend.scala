@@ -28,6 +28,7 @@ class ClientDmaRequest(implicit p: Parameters) extends ClientDmaBundle()(p) {
   val dst_stride = UInt(width = dmaSegmentSizeBits)
   val segment_size = UInt(width = dmaSegmentSizeBits)
   val nsegments  = UInt(width = dmaSegmentBits)
+  val alloc = UInt(width = 2)
 
   def isPrefetch(dummy: Int = 0): Bool =
     cmd === DmaRequest.DMA_CMD_PFR || cmd === DmaRequest.DMA_CMD_PFW
@@ -40,7 +41,8 @@ object ClientDmaRequest {
             segment_size: UInt,
             nsegments: UInt = UInt(1),
             src_stride: UInt = UInt(0),
-            dst_stride: UInt = UInt(0))
+            dst_stride: UInt = UInt(0),
+            alloc: UInt = UInt("b10"))
       (implicit p: Parameters) = {
     val req = Wire(new ClientDmaRequest)
     req.cmd := cmd
@@ -50,6 +52,7 @@ object ClientDmaRequest {
     req.dst_stride := dst_stride
     req.segment_size := segment_size
     req.nsegments := nsegments
+    req.alloc := alloc
     req
   }
 }
@@ -125,6 +128,8 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   val dma_busy = Reg(init = UInt(0, tlMaxClientXacts))
   val dma_xact_id = PriorityEncoder(~dma_busy)
 
+  val alloc = Reg(UInt(width = 2))
+
   val (s_idle :: s_translate :: s_dma_req :: s_dma_update ::
        s_prepare :: s_finish :: Nil) = Enum(Bits(), 6)
   val state = Reg(init = s_idle)
@@ -181,7 +186,8 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
     cmd = cmd,
     source = src_paddr,
     dest = dst_paddr,
-    length = tx_len)
+    length = tx_len,
+    alloc = alloc)
   io.dma.resp.ready := Bool(true)
 
   when (io.cpu.req.fire()) {
@@ -196,6 +202,7 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
     bytes_left := req.segment_size
     to_translate := Mux(req.isPrefetch(), UInt("b10"), UInt("b11"))
     tlb_sent := UInt(0)
+    alloc := req.alloc
     state := s_translate
   }
 
