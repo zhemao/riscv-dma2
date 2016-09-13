@@ -392,6 +392,16 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
   val bytes_valid = Reg(Vec(nDmaTrackerMemXacts, UInt(width = tlByteAddrBits)))
 
   val alloc = Reg(Bool())
+  val send_block =
+    if (pipelineDepth >= tlDataBeats)
+      src_beat === UInt(0) && src_byte_off === UInt(0) && bytes_left >= UInt(blockBytes)
+    else Bool(false)
+  val beats_inflight = Reg(UInt(width = log2Up(pipelineDepth + 1)), init = UInt(0))
+
+  beats_inflight := beats_inflight +
+    Mux(io.mem.acquire.fire(),
+      Mux(send_block, UInt(tlDataBeats), UInt(1)), UInt(0)) -
+    Mux(io.mem.grant.fire(), UInt(1), UInt(0))
 
   when (state === s_idle && io.dma_req.valid) {
     src_addr := io.dma_req.bits.source
@@ -401,7 +411,8 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
   }
 
   when (io.mem.acquire.fire()) {
-    val bytes_to_read = UInt(tlDataBytes) - src_byte_off
+    val bytes_to_read =
+      Mux(send_block, UInt(blockBytes), UInt(tlDataBytes) - src_byte_off)
     src_addr := src_addr + bytes_to_read
     byte_offsets(get_id) := src_byte_off
     bytes_valid(get_id) := Mux(bytes_to_read < bytes_left, bytes_to_read, bytes_left)
@@ -416,21 +427,28 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
 
   get_busy := (get_busy |
     Mux(io.mem.acquire.fire(), UIntToOH(get_id), UInt(0))) &
-    ~Mux(io.mem.grant.fire(), UIntToOH(io.mem.grant.bits.client_xact_id), UInt(0))
+    ~Mux(io.mem.grant.fire() && io.mem.grant.bits.last(),
+      UIntToOH(io.mem.grant.bits.client_xact_id), UInt(0))
 
   // How many reads are outstanding?
-  val flow_ctrl_cnt = PopCount(get_busy) + io.pipe_cnt
-  val block_acquire = get_busy.andR || flow_ctrl_cnt >= UInt(pipelineDepth)
+  val flow_ctrl_cnt = beats_inflight + io.pipe_cnt
+  val send_cnt = Mux(send_block, UInt(tlDataBeats), UInt(1)).suggestName("send_cnt")
+  val block_acquire = get_busy.andR || (send_cnt +& flow_ctrl_cnt) > UInt(pipelineDepth)
 
   val gnt_byte_off = byte_offsets(io.mem.grant.bits.client_xact_id)
   val gnt_bytes_valid = bytes_valid(io.mem.grant.bits.client_xact_id)
 
   io.mem.acquire.valid := state === s_mem_req && !block_acquire
-  io.mem.acquire.bits := Get(
-    client_xact_id = get_id,
-    addr_block = src_block,
-    addr_beat = src_beat,
-    alloc = alloc)
+  io.mem.acquire.bits := Mux(send_block,
+    GetBlock(
+      client_xact_id = get_id,
+      addr_block = src_block,
+      alloc = alloc),
+    Get(
+      client_xact_id = get_id,
+      addr_block = src_block,
+      addr_beat = src_beat,
+      alloc = alloc))
   io.mem.grant.ready := io.pipe.ready
   io.pipe.valid := io.mem.grant.valid
   io.pipe.bits.data := io.mem.grant.bits.data >> Cat(gnt_byte_off, UInt(0, 3))
