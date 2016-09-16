@@ -4,7 +4,8 @@ import Chisel._
 import uncore.tilelink._
 import uncore.agents._
 import uncore.util._
-import junctions.{ParameterizedBundle, AddrMap}
+import junctions.AddrMap
+import util.ParameterizedBundle
 import rocket._
 import cde.Parameters
 import DmaRequest._
@@ -61,15 +62,19 @@ object ClientDmaResponse {
   val pagefault = UInt("b01")
   val invalid_region = UInt("b10")
 
-  def apply(status: UInt = UInt(0))(implicit p: Parameters) = {
+  def apply(status: UInt = UInt(0), fault_vpn: UInt = UInt(0))
+           (implicit p: Parameters) = {
     val resp = Wire(new ClientDmaResponse)
     resp.status := status
+    resp.fault_vpn := fault_vpn
     resp
   }
 }
 
-class ClientDmaResponse(implicit p: Parameters) extends ClientDmaBundle {
+class ClientDmaResponse(implicit p: Parameters)
+    extends ClientDmaBundle()(p) with HasCoreParameters {
   val status = UInt(width = dmaStatusBits)
+  val fault_vpn = UInt(width = vpnBits)
 }
 
 class ClientDmaIO(implicit p: Parameters) extends ParameterizedBundle()(p) {
