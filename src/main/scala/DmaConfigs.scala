@@ -39,8 +39,8 @@ class WithDmaTest extends Config(
       uncached = 1, cached = 1, ptw = 1,
       maxXacts = 3 * site(NDmaTrackerMemXacts) * site(NDmaTrackers)))
     case DmaTestKey => DmaTestParameters(
-      src_start = 0x80000000L,
-      dst_start = 0x80001004L,
+      src_start = 0x80000004L,
+      dst_start = 0x80001000L,
       segment_size = 0x100,
       nsegments = 1,
       src_stride = 0,
