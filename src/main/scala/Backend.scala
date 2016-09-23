@@ -20,7 +20,7 @@ trait HasDmaParameters {
   val nDmaTrackerMemXacts = p(NDmaTrackerMemXacts)
   val dmaXactIdBits = log2Up(nDmaXacts)
   val addrBits = p(PAddrBits)
-  val dmaStatusBits = 2
+  val dmaStatusBits = 3
 }
 
 abstract class DmaModule(implicit val p: Parameters) extends Module with HasDmaParameters

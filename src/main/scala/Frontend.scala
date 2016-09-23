@@ -36,6 +36,8 @@ class ClientDmaRequest(implicit p: Parameters) extends ClientDmaBundle()(p) {
 }
 
 object ClientDmaRequest {
+  val DMA_CMD_RESUME = UInt("b01")
+
   def apply(cmd: UInt,
             src_start: UInt,
             dst_start: UInt,
@@ -57,10 +59,14 @@ object ClientDmaRequest {
     req
   }
 }
+import ClientDmaRequest._
 
 object ClientDmaResponse {
-  val pagefault = UInt("b01")
-  val invalid_region = UInt("b10")
+  val NO_ERROR = UInt("b000")
+  val SRC_PAGE_FAULT = UInt("b010")
+  val DST_PAGE_FAULT = UInt("b011")
+  val SRC_INVALID_REGION = UInt("b100")
+  val DST_INVALID_REGION = UInt("b101")
 
   def apply(status: UInt = UInt(0), fault_vpn: UInt = UInt(0))
            (implicit p: Parameters) = {
@@ -70,6 +76,7 @@ object ClientDmaResponse {
     resp
   }
 }
+import ClientDmaResponse._
 
 class ClientDmaResponse(implicit p: Parameters)
     extends ClientDmaBundle()(p) with HasCoreParameters {
@@ -144,6 +151,7 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   val tlb_sent = Reg(init = UInt(0, 2))
   val tlb_to_send = to_translate & ~tlb_sent
   val resp_status = Reg(UInt(width = dmaStatusBits))
+  val fault_vpn = Reg(UInt(width = vpnBits))
 
   tlb.io.req.valid := tlb_to_send.orR
   tlb.io.req.bits.vpn := Mux(tlb_to_send(0), src_vpn, dst_vpn)
@@ -157,33 +165,33 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   }
 
   when (tlb.io.resp.fire()) {
-    val recv_choice = PriorityEncoderOH(to_translate)
-    val xcpt = Mux(recv_choice(0),
-      tlb.io.resp.bits.xcpt_ld, tlb.io.resp.bits.xcpt_st)
+    val recv_choice_oh = PriorityEncoderOH(to_translate)
+    val recv_choice = OHToUInt(recv_choice_oh)(0)
+    val xcpt = Mux(recv_choice,
+      tlb.io.resp.bits.xcpt_st, tlb.io.resp.bits.xcpt_ld)
     val cacheable = tlb.io.resp.bits.cacheable
 
-    when (xcpt) {
-      resp_status := ClientDmaResponse.pagefault
+    when (xcpt || !cacheable) {
+      resp_status := Mux(xcpt,
+        Mux(recv_choice, DST_PAGE_FAULT, SRC_PAGE_FAULT),
+        Mux(recv_choice, DST_INVALID_REGION, SRC_INVALID_REGION))
+      fault_vpn := Mux(recv_choice, dst_vpn, src_vpn)
       state := s_finish
-    }
-    when (!cacheable) {
-      resp_status := ClientDmaResponse.invalid_region
-      state := s_finish
-    }
-
-    // getting the src translation
-    when (recv_choice(0)) {
-      src_ppn := tlb.io.resp.bits.ppn
     } .otherwise {
-      dst_ppn := tlb.io.resp.bits.ppn
-    }
+      // getting the src translation
+      when (recv_choice) {
+        dst_ppn := tlb.io.resp.bits.ppn
+      } .otherwise {
+        src_ppn := tlb.io.resp.bits.ppn
+      }
 
-    to_translate := to_translate & ~recv_choice
+      to_translate := to_translate & ~recv_choice_oh
+    }
   }
 
   io.cpu.req.ready := state === s_idle
   io.cpu.resp.valid := state === s_finish
-  io.cpu.resp.bits := ClientDmaResponse(resp_status)
+  io.cpu.resp.bits := ClientDmaResponse(resp_status, fault_vpn)
 
   io.dma.req.valid := (state === s_dma_req) && !dma_busy.andR
   io.dma.req.bits := DmaRequest(
@@ -197,17 +205,19 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
 
   when (io.cpu.req.fire()) {
     val req = io.cpu.req.bits
-    cmd := req.cmd
-    src_vaddr := req.src_start
-    dst_vaddr := req.dst_start
-    src_stride := req.src_stride
-    dst_stride := req.dst_stride
-    segment_size := req.segment_size
-    segments_left := req.nsegments - UInt(1)
-    bytes_left := req.segment_size
-    to_translate := Mux(req.isPrefetch(), UInt("b10"), UInt("b11"))
+    when (req.cmd =/= DMA_CMD_RESUME) {
+      cmd := req.cmd
+      src_vaddr := req.src_start
+      dst_vaddr := req.dst_start
+      src_stride := req.src_stride
+      dst_stride := req.dst_stride
+      segment_size := req.segment_size
+      segments_left := req.nsegments - UInt(1)
+      bytes_left := req.segment_size
+      to_translate := Mux(req.isPrefetch(), UInt("b10"), UInt("b11"))
+      alloc := req.alloc
+    }
     tlb_sent := UInt(0)
-    alloc := req.alloc
     state := s_translate
   }
 
@@ -233,7 +243,7 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   when (state === s_dma_update) {
     when (bytes_left === UInt(0)) {
       when (segments_left === UInt(0)) {
-        resp_status := UInt(0)
+        resp_status := NO_ERROR
         state := s_finish
       } .otherwise {
         last_src_vpn := src_vpn

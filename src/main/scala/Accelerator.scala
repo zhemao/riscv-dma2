@@ -15,13 +15,14 @@ object DmaCtrlRegNumbers {
   val NSEGMENTS = 3
   val ALLOC = 4
   val RESP_STATUS = 5
+  val RESP_VPN = 6
 }
 import DmaCtrlRegNumbers._
 
 class DmaCtrlRegFile(implicit val p: Parameters) extends Module
     with HasClientDmaParameters with HasTileLinkParameters {
 
-  private val nRegs = 6
+  private val nRegs = 7
 
   val io = new Bundle {
     val wen = Bool(INPUT)
@@ -36,9 +37,15 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
     val alloc = UInt(OUTPUT, 2)
 
     val dma_resp = Valid(new ClientDmaResponse).flip
+    val error = Bool(OUTPUT)
   }
 
   val regs = Reg(Vec(nRegs, UInt(width = dmaSegmentSizeBits)))
+
+  when (reset) {
+    regs(ALLOC) := UInt("b10")
+    regs(RESP_STATUS) := UInt(0)
+  }
 
   io.src_stride := regs(SRC_STRIDE)
   io.dst_stride := regs(DST_STRIDE)
@@ -50,6 +57,7 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
   when (io.dma_resp.valid) { regs(RESP_STATUS) := io.dma_resp.bits.status }
 
   io.rdata := regs(io.rwaddr)
+  io.error := regs(RESP_STATUS) =/= UInt(0)
 }
 
 class DmaController(implicit val p: Parameters) extends Module
@@ -60,6 +68,7 @@ class DmaController(implicit val p: Parameters) extends Module
     val ptw = new TLBPTWIO
     val dma = new DmaIO
     val busy = Bool(OUTPUT)
+    val interrupt = Bool(OUTPUT)
   }
 
   val cmd = Queue(io.cmd)
@@ -90,6 +99,7 @@ class DmaController(implicit val p: Parameters) extends Module
   io.ptw <> frontend.io.ptw
   io.dma <> frontend.io.dma
   io.busy := cmd.valid || frontend.io.busy
+  io.interrupt := crfile.io.error
 
   io.resp.valid := cmd.valid && is_cr_read
   io.resp.bits.rd := inst.rd
@@ -122,5 +132,5 @@ class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
   }
   io.mem.req.valid := Bool(false)
   io.mem.invalidate_lr := Bool(false)
-  io.interrupt := Bool(false)
+  io.interrupt := ctrl.io.interrupt
 }
