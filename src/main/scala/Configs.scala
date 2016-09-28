@@ -6,6 +6,7 @@ import groundtest._
 import coreplex.WithL2Cache
 import rocketchip._
 import junctions._
+import uncore.tilelink.TLKey
 import cde.{Parameters, Config, Knob, CDEMatchError}
 
 class WithDma extends Config(
@@ -19,7 +20,7 @@ class WithDma extends Config(
     case CopyAccelShareMemChannel => Knob("CA_SHARE_MEM_CHANNEL")
     case NDmaTrackers => 1
     case NDmaXacts => 4
-    case NDmaTrackerMemXacts => 2 * site(MIFDataBeats)
+    case NDmaTrackerMemXacts => 16
     // 3 clients (prefetch, put, get) per tracker
     case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts) * site(NDmaTrackers)
     case DmaTrackerPipelineDepth => site(NDmaTrackerMemXacts)
