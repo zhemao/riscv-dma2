@@ -4,7 +4,7 @@ import Chisel._
 import cde.{Parameters, Field}
 import junctions._
 import junctions.NastiConstants._
-import util.ParameterizedBundle
+import util._
 import uncore.tilelink._
 import uncore.util._
 

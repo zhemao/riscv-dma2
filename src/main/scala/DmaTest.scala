@@ -5,9 +5,8 @@ import groundtest._
 import rocket.{TLBPTWIO, HasCoreParameters}
 import uncore.tilelink._
 import uncore.agents.CacheBlockBytes
-import uncore.util._
 import uncore.constants._
-import util.Timer
+import util._
 import junctions.PAddrBits
 import rocket._
 import cde.{Parameters, Field}
