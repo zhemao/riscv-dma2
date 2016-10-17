@@ -63,6 +63,7 @@ import ClientDmaRequest._
 
 object ClientDmaResponse {
   val NO_ERROR = UInt("b000")
+  val PAUSED = UInt("b001")
   val SRC_PAGE_FAULT = UInt("b010")
   val DST_PAGE_FAULT = UInt("b011")
   val SRC_INVALID_REGION = UInt("b100")
@@ -96,6 +97,7 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
     val ptw = new TLBPTWIO
     val dma = new DmaIO
     val busy = Bool(OUTPUT)
+    val pause = Bool(INPUT)
   }
 
   val tlb = Module(new DecoupledTLB()(p.alterPartial({
@@ -147,11 +149,12 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   val state = Reg(init = s_idle)
 
   // lower bit is for src, higher bit is for dst
-  val to_translate = Reg(init = UInt(0, 2))
-  val tlb_sent = Reg(init = UInt(0, 2))
+  val to_translate = Reg(UInt(width = 2), init = UInt(0))
+  val tlb_sent = Reg(UInt(width = 2), init = ~UInt(0, 2))
   val tlb_to_send = to_translate & ~tlb_sent
   val resp_status = Reg(UInt(width = dmaStatusBits))
   val fault_vpn = Reg(UInt(width = vpnBits))
+  val ptw_errors = Reg(init = UInt(0, 2))
 
   tlb.io.req.valid := tlb_to_send.orR
   tlb.io.req.bits.vpn := Mux(tlb_to_send(0), src_vpn, dst_vpn)
@@ -167,16 +170,18 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   when (tlb.io.resp.fire()) {
     val recv_choice_oh = PriorityEncoderOH(to_translate)
     val recv_choice = OHToUInt(recv_choice_oh)(0)
-    val xcpt = Mux(recv_choice,
+    val page_fault = Mux(recv_choice,
       tlb.io.resp.bits.xcpt_st, tlb.io.resp.bits.xcpt_ld)
-    val cacheable = tlb.io.resp.bits.cacheable
+    val bad_region = Mux(recv_choice,
+      alloc(1) && !tlb.io.resp.bits.cacheable,
+      alloc(0) && !tlb.io.resp.bits.cacheable)
 
-    when (xcpt || !cacheable) {
-      resp_status := Mux(xcpt,
+    when (page_fault || bad_region) {
+      resp_status := Mux(page_fault,
         Mux(recv_choice, DST_PAGE_FAULT, SRC_PAGE_FAULT),
         Mux(recv_choice, DST_INVALID_REGION, SRC_INVALID_REGION))
       fault_vpn := Mux(recv_choice, dst_vpn, src_vpn)
-      state := s_finish
+      ptw_errors := ptw_errors | recv_choice_oh
     } .otherwise {
       // getting the src translation
       when (recv_choice) {
@@ -216,13 +221,22 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
       bytes_left := req.segment_size
       to_translate := Mux(req.isPrefetch(), UInt("b10"), UInt("b11"))
       alloc := req.alloc
+    } .otherwise {
+      // On resume, retranslate any pages that had errors
+      to_translate := ptw_errors
     }
-    tlb_sent := UInt(0)
-    state := s_translate
+    when (io.pause) {
+      resp_status := PAUSED
+      state := s_finish
+    } .otherwise {
+      tlb_sent := UInt(0)
+      ptw_errors := UInt(0)
+      state := s_translate
+    }
   }
 
   when (state === s_translate && !to_translate.orR) {
-    state := s_dma_req
+    state := Mux(ptw_errors.orR, s_finish, s_dma_req)
   }
 
   def setBusy(set: Bool, xact_id: UInt): UInt =
@@ -248,25 +262,26 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
       } .otherwise {
         last_src_vpn := src_vpn
         last_dst_vpn := dst_vpn
-        src_vaddr := src_vaddr + src_stride
-        dst_vaddr := dst_vaddr + dst_stride
+        src_vaddr := src_vaddr + Mux(adv_ptr(0), src_stride, UInt(0))
+        dst_vaddr := dst_vaddr + Mux(adv_ptr(1), dst_stride, UInt(0))
         bytes_left := segment_size
         segments_left := segments_left - UInt(1)
         state := s_prepare
       }
-    } .otherwise {
-      to_translate := adv_ptr & Cat(dst_idx === UInt(0), src_idx === UInt(0))
-      tlb_sent := UInt(0)
-      state := s_translate
-    }
+    } .otherwise { state := s_prepare }
   }
 
   when (state === s_prepare) {
     to_translate := adv_ptr & Cat(
       dst_vpn =/= last_dst_vpn,
       src_vpn =/= last_src_vpn)
-    tlb_sent := UInt(0)
-    state := s_translate
+    when (io.pause) {
+      resp_status := PAUSED
+      state := s_finish
+    } .otherwise {
+      tlb_sent := UInt(0)
+      state := s_translate
+    }
   }
 
   when (state === s_finish) { state := s_idle }
