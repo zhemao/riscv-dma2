@@ -100,10 +100,12 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
     val pause = Bool(INPUT)
   }
 
+  val tlb_flush = Wire(init = Bool(false))
   val tlb = Module(new DecoupledTLB()(p.alterPartial({
     case CacheName => "L1D"
   })))
   io.ptw <> tlb.io.ptw
+  tlb.io.ptw.invalidate := io.ptw.invalidate || tlb_flush
 
   private val pgSize = 1 << pgIdxBits
 
@@ -189,9 +191,8 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
       } .otherwise {
         src_ppn := tlb.io.resp.bits.ppn
       }
-
-      to_translate := to_translate & ~recv_choice_oh
     }
+    to_translate := to_translate & ~recv_choice_oh
   }
 
   io.cpu.req.ready := state === s_idle
@@ -224,6 +225,7 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
     } .otherwise {
       // On resume, retranslate any pages that had errors
       to_translate := ptw_errors
+      tlb_flush := ptw_errors.orR
     }
     when (io.pause) {
       resp_status := PAUSED
