@@ -17,14 +17,13 @@ object DmaCtrlRegNumbers {
   val ACCEL_CTRL = 4
   val RESP_STATUS = 5
   val RESP_VPN = 6
-  val PAUSE = 7
 }
 import DmaCtrlRegNumbers._
 
 class DmaCtrlRegFile(implicit val p: Parameters) extends Module
     with HasClientDmaParameters with HasTileLinkParameters {
 
-  private val nRegs = 8
+  private val nRegs = 7
 
   val io = new Bundle {
     val wen = Bool(INPUT)
