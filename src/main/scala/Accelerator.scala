@@ -117,7 +117,7 @@ class DmaController(implicit val p: Parameters) extends Module
   io.ptw <> frontend.io.ptw
   io.dma <> frontend.io.dma
   io.busy := cmd.valid || frontend.io.busy
-  io.interrupt := crfile.io.error
+  io.interrupt := Bool(false)
 
   io.resp.valid := cmd.valid && is_cr_read
   io.resp.bits.rd := inst.rd
