@@ -20,10 +20,10 @@ class WithDma extends Config(
     case CopyAccelShareMemChannel => Knob("CA_SHARE_MEM_CHANNEL")
     case NDmaTrackers => 1
     case NDmaXacts => 4
-    case NDmaTrackerMemXacts => 16
+    case NDmaTrackerMemXacts => site(DmaTrackerPipelineDepth)
     // 3 clients (prefetch, put, get) per tracker
     case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts) * site(NDmaTrackers)
-    case DmaTrackerPipelineDepth => site(NDmaTrackerMemXacts)
+    case DmaTrackerPipelineDepth => 16
     case BuildDmaTracker => (p: Parameters) => Module(new PipelinedDmaTracker()(p))
     case SimMemLatency => 20
     case _ => throw new CDEMatchError
