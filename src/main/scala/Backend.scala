@@ -303,10 +303,102 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
 
 case object DmaTrackerPipelineDepth extends Field[Int]
 
+trait PipelineUtils {
+  implicit val p: Parameters
+  val pipelineDepth = p(DmaTrackerPipelineDepth)
+  val pipelineIdxBits = log2Up(pipelineDepth)
+  val pipelineCountBits = log2Up(pipelineDepth+1)
+
+  def incWrap(cur: UInt, inc: UInt): UInt = {
+    val unwrapped = cur +& inc
+    Mux(unwrapped >= UInt(pipelineDepth), unwrapped - UInt(pipelineDepth), unwrapped)
+  }
+}
+
 class PipelinePacket(implicit p: Parameters)
     extends DmaBundle()(p) with HasTileLinkParameters {
   val data = UInt(width = tlDataBits)
   val bytes = UInt(width = log2Up(tlDataBytes))
+}
+
+class ReservationRequest extends Bundle {
+  val multibeat = Bool()
+}
+
+class ReservationResponse(implicit val p: Parameters) extends ParameterizedBundle()(p)
+    with PipelineUtils {
+  val idx = UInt(width = pipelineIdxBits)
+}
+
+class ReservationData(implicit p: Parameters) extends TLBundle()(p)
+    with PipelineUtils {
+  val data = UInt(width = tlDataBits)
+  val bytes = UInt(width = tlByteAddrBits)
+  val idx = UInt(width = pipelineIdxBits)
+}
+
+class ReservationInputIO(implicit p: Parameters) extends ParameterizedBundle()(p) {
+  val req = Decoupled(new ReservationRequest)
+  val resp = Decoupled(new ReservationResponse).flip
+  val data = Decoupled(new ReservationData)
+}
+
+class ReservationOutputIO(implicit val p: Parameters) extends ParameterizedBundle()(p)
+    with PipelineUtils {
+  val count = UInt(OUTPUT, pipelineCountBits)
+  val data = Decoupled(new PipelinePacket)
+}
+
+class ReservationQueue(implicit p: Parameters) extends TLModule()(p)
+    with PipelineUtils {
+  val io = new Bundle {
+    val in = (new ReservationInputIO).flip
+    val out = new ReservationOutputIO
+  }
+
+  val req = Queue(io.in.req, 1)
+
+  val pkt_buffer = Mem(pipelineDepth, new PipelinePacket)
+  val pkt_valid = Reg(init = UInt(0, pipelineDepth))
+
+  val head = Reg(init = UInt(0, pipelineIdxBits))
+  val tail = Reg(init = UInt(0, pipelineIdxBits))
+  val count = Reg(init = UInt(0, pipelineCountBits))
+
+  val req_count = Mux(req.bits.multibeat, UInt(tlDataBeats), UInt(1))
+  count := count + Mux(req.fire(), req_count, UInt(0)) - io.out.data.fire()
+
+  val full = (count + req_count) > UInt(pipelineDepth)
+
+  req.ready := io.in.resp.ready && !full
+  io.in.resp.valid := req.valid && !full
+  io.in.resp.bits.idx := tail
+
+  io.in.data.ready := Bool(true)
+  io.out.data.valid := (pkt_valid >> head)(0)
+  io.out.data.bits := pkt_buffer(head)
+  // This technically isn't entirely safe, since there may be discontinuities
+  // But doing it safely would be rather expensive, and it probably isn't too wrong
+  io.out.count := PopCount(pkt_valid)
+
+  when (req.fire()) {
+    tail := incWrap(tail, req_count)
+  }
+
+  when (io.in.data.fire()) {
+    val pkt = Wire(new PipelinePacket)
+    pkt.data := io.in.data.bits.data
+    pkt.bytes := io.in.data.bits.bytes
+    pkt_buffer(io.in.data.bits.idx) := pkt
+  }
+
+  when (io.out.data.fire()) {
+    head := incWrap(head, UInt(1))
+  }
+
+  pkt_valid := (pkt_valid &
+    ~Mux(io.out.data.fire(), UIntToOH(head), UInt(0))) |
+    Mux(io.in.data.fire(), UIntToOH(io.in.data.bits.idx), UInt(0))
 }
 
 class PipelinedDmaTrackerPrefetcher(implicit p: Parameters)
@@ -361,15 +453,14 @@ class PipelinedDmaTrackerPrefetcher(implicit p: Parameters)
 }
 
 class PipelinedDmaTrackerReader(implicit p: Parameters)
-    extends DmaModule()(p) with HasTileLinkParameters {
-
-  val pipelineDepth = p(DmaTrackerPipelineDepth)
+    extends DmaModule()(p)
+    with HasTileLinkParameters
+    with PipelineUtils {
 
   val io = new Bundle {
     val dma_req = Valid(new DmaRequest).flip
     val mem = new ClientUncachedTileLinkIO
-    val pipe = Decoupled(new PipelinePacket)
-    val pipe_cnt = UInt(INPUT, log2Up(pipelineDepth+1))
+    val res = new ReservationInputIO
     val busy = Bool(OUTPUT)
   }
 
@@ -382,76 +473,88 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
   val src_byte_off = src_addr(tlByteAddrBits - 1, 0)
   val bytes_left = Reg(UInt(width = addrBits))
 
-  val s_idle :: s_mem_req :: Nil = Enum(Bits(), 2)
+  val s_idle :: s_reserve :: s_mem_req :: Nil = Enum(Bits(), 3)
   val state = Reg(init = s_idle)
 
-  val get_busy = Reg(init = Bool(false))
-  val byte_offset = Reg(UInt(width = tlByteAddrBits))
-  val bytes_valid = Reg(UInt(width = tlByteAddrBits))
+  val get_busy = Reg(init = UInt(0, nDmaTrackerMemXacts))
+  val byte_offset = Mem(nDmaTrackerMemXacts, UInt(width = tlByteAddrBits))
+  val bytes_valid = Mem(nDmaTrackerMemXacts, UInt(width = tlByteAddrBits))
+  val get_id_onehot = PriorityEncoderOH(~get_busy)
+  val get_id = Reg(UInt(width = log2Up(nDmaTrackerMemXacts)))
+  val data_index = Reg(Vec(nDmaTrackerMemXacts, UInt(width = log2Up(pipelineDepth))))
 
   val alloc = Reg(Bool())
-  val send_block =
-    if (pipelineDepth >= tlDataBeats)
-      src_beat === UInt(0) && src_byte_off === UInt(0) && bytes_left >= UInt(blockBytes)
-    else Bool(false)
-  val beats_inflight = Reg(UInt(width = log2Up(pipelineDepth + 1)), init = UInt(0))
-
-  beats_inflight := beats_inflight +
-    Mux(io.mem.acquire.fire(),
-      Mux(send_block, UInt(tlDataBeats), UInt(1)), UInt(0)) -
-    Mux(io.mem.grant.fire(), UInt(1), UInt(0))
+  val send_block = Bool(pipelineDepth >= tlDataBeats) &&
+    src_beat === UInt(0) && src_byte_off === UInt(0) &&
+    bytes_left >= UInt(blockBytes)
 
   when (state === s_idle && io.dma_req.valid) {
     src_addr := io.dma_req.bits.source
     bytes_left := io.dma_req.bits.length
     alloc := io.dma_req.bits.alloc(0)
+    state := s_reserve
+  }
+
+  when (io.res.req.fire()) {
+    get_id := OHToUInt(get_id_onehot)
     state := s_mem_req
+  }
+
+  when (io.res.resp.fire()) {
+    data_index(get_id) := io.res.resp.bits.idx
   }
 
   when (io.mem.acquire.fire()) {
     val bytes_to_read =
       Mux(send_block, UInt(blockBytes), UInt(tlDataBytes) - src_byte_off)
+
     src_addr := src_addr + bytes_to_read
-    byte_offset := src_byte_off
-    bytes_valid := Mux(bytes_to_read < bytes_left, bytes_to_read, bytes_left)
+    byte_offset(get_id) := src_byte_off
+    bytes_valid(get_id) := Mux(bytes_to_read > UInt(tlDataBytes), UInt(0),
+                           Mux(bytes_to_read < bytes_left, bytes_to_read, bytes_left))
 
     when (bytes_left > bytes_to_read) {
       bytes_left := bytes_left - bytes_to_read
+      state := s_reserve
     } .otherwise {
       bytes_left := UInt(0)
       state := s_idle
     }
-
-    get_busy := Bool(true)
   }
 
-  when (io.mem.grant.fire() && io.mem.grant.bits.last()) {
-    get_busy := Bool(false)
-  }
+  io.res.req.valid := (state === s_reserve) && !get_busy.andR
+  io.res.req.bits.multibeat := send_block
 
-  // How many reads are outstanding?
-  val flow_ctrl_cnt = beats_inflight + io.pipe_cnt
-  val send_cnt = Mux(send_block, UInt(tlDataBeats), UInt(1)).suggestName("send_cnt")
-  val block_acquire = get_busy || (send_cnt +& flow_ctrl_cnt) > UInt(pipelineDepth)
-
-  io.mem.acquire.valid := state === s_mem_req && !block_acquire
+  io.res.resp.ready := (state === s_mem_req) && io.mem.acquire.ready
+  io.mem.acquire.valid := (state === s_mem_req) && io.res.resp.valid
   io.mem.acquire.bits := Mux(send_block,
     GetBlock(
-      client_xact_id = UInt(0),
+      client_xact_id = get_id,
       addr_block = src_block,
       alloc = alloc),
     Get(
-      client_xact_id = UInt(0),
+      client_xact_id = get_id,
       addr_block = src_block,
       addr_beat = src_beat,
       alloc = alloc))
-  io.mem.grant.ready := io.pipe.ready
 
-  io.pipe.valid := io.mem.grant.valid
-  io.pipe.bits.data := io.mem.grant.bits.data >> Cat(byte_offset, UInt(0, 3))
-  io.pipe.bits.bytes := bytes_valid - UInt(1)
+  val grant_id = io.mem.grant.bits.client_xact_id
 
-  io.busy := state =/= s_idle || get_busy
+  get_busy := (get_busy | Mux(io.res.req.fire(), get_id_onehot, UInt(0))) &
+                          ~Mux(io.mem.grant.fire() && io.mem.grant.bits.last(),
+                            UIntToOH(grant_id), UInt(0))
+
+  when (io.res.data.fire()) {
+    data_index(grant_id) := incWrap(data_index(grant_id), UInt(1))
+  }
+
+  io.mem.grant.ready := io.res.data.ready
+  io.res.data.valid := io.mem.grant.valid
+  io.res.data.bits.idx := data_index(grant_id)
+  io.res.data.bits.data := io.mem.grant.bits.data >> Cat(byte_offset(grant_id), UInt(0, 3))
+  io.res.data.bits.bytes := bytes_valid(grant_id) - UInt(1)
+
+  io.busy := state =/= s_idle || get_busy.orR
 }
 
 class PipelinedDmaTrackerWriter(implicit p: Parameters)
@@ -462,8 +565,7 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   val io = new Bundle {
     val dma_req = Valid(new DmaRequest).flip
     val mem = new ClientUncachedTileLinkIO
-    val pipe = Decoupled(new PipelinePacket).flip
-    val pipe_cnt = UInt(INPUT, log2Up(pipelineDepth+1))
+    val pipe = (new ReservationOutputIO).flip
     val busy = Bool(OUTPUT)
   }
 
@@ -496,7 +598,7 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
 
   val send_block = Reg(init = Bool(false))
   val alloc = Reg(Bool())
-  val block_acquire = send_block && (io.pipe_cnt < (UInt(tlDataBeats - 1) - dst_beat))
+  val block_acquire = send_block && (io.pipe.count < (UInt(tlDataBeats - 1) - dst_beat))
 
   io.mem.acquire.valid := (state === s_mem_req) &&
                           (!put_busy.andR || send_block && dst_beat =/= UInt(0)) &&
@@ -533,9 +635,9 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
     state := s_pipe
   }
 
-  when (io.pipe.fire()) {
-    data := data | (io.pipe.bits.data << Cat(bytes_val, UInt(0, 3)))
-    bytes_val := bytes_val + io.pipe.bits.bytes + UInt(1)
+  when (io.pipe.data.fire()) {
+    data := data | (io.pipe.data.bits.data << Cat(bytes_val, UInt(0, 3)))
+    bytes_val := bytes_val + io.pipe.data.bits.bytes + UInt(1)
     state := s_check
   }
 
@@ -562,7 +664,7 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
     state := s_check
   }
 
-  io.pipe.ready := state === s_pipe
+  io.pipe.data.ready := state === s_pipe
   io.busy := state =/= s_idle || put_busy.orR
 }
 
@@ -580,18 +682,9 @@ class PipelinedDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   // we can't have more outstanding requests than we have pipeline space
   require(nDmaTrackerMemXacts <= pipelineDepth)
 
-  if (p(DmaTrackerPipelineDepth) > 1) {
-    // one pipeline register is in the writer itself
-    val pipe = Module(new Queue(new PipelinePacket, pipelineDepth - 1))
-    pipe.io.enq <> reader.io.pipe
-    writer.io.pipe <> pipe.io.deq
-    reader.io.pipe_cnt := pipe.io.count +& !writer.io.pipe.ready
-    writer.io.pipe_cnt := pipe.io.count +& reader.io.pipe.valid
-  } else {
-    writer.io.pipe <> reader.io.pipe
-    reader.io.pipe_cnt := !writer.io.pipe.ready
-    writer.io.pipe_cnt := reader.io.pipe.valid
-  }
+  val resq = Module(new ReservationQueue)
+  resq.io.in <> reader.io.res
+  writer.io.pipe <> resq.io.out
 
   val s_idle :: s_resp :: Nil = Enum(Bits(), 2)
   val state = Reg(init = s_idle)
