@@ -587,7 +587,7 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   val s_idle :: s_mem_req :: s_resp :: Nil = Enum(Bits(), 3)
   val state = Reg(init = s_idle)
 
-  val last_data = Reg(UInt(width = 2 * tlDataBits))
+  val last_data = Reg(UInt(width = tlDataBits))
   val last_bytes_val = Reg(UInt(width = log2Up(tlDataBytes) + 1))
 
   val put_busy = Reg(UInt(width = nDmaTrackerMemXacts), init = UInt(0))
@@ -616,7 +616,7 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
 
   val send_block = Reg(init = Bool(false))
   val alloc = Reg(Bool())
-  val block_acquire = send_block && (io.pipe.count < (UInt(tlDataBeats - 1) - dst_beat))
+  val block_acquire = send_block && (io.pipe.count < (UInt(tlDataBeats) - dst_beat))
   val acquire_ok = (state === s_mem_req) &&
                    (!put_busy.andR || send_block && dst_beat =/= UInt(0)) &&
                    !block_acquire
