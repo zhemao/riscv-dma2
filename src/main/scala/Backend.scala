@@ -377,9 +377,7 @@ class ReservationQueue(implicit p: Parameters) extends TLModule()(p)
   io.in.data.ready := Bool(true)
   io.out.data.valid := (pkt_valid >> head)(0)
   io.out.data.bits := pkt_buffer(head)
-  // This technically isn't entirely safe, since there may be discontinuities
-  // But doing it safely would be rather expensive, and it probably isn't too wrong
-  io.out.count := PopCount(pkt_valid)
+  io.out.count := count // count is amount allocated, not amount stored
 
   when (req.fire()) {
     tail := incWrap(tail, req_count)
