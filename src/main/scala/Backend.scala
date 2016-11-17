@@ -83,7 +83,7 @@ abstract class DmaTracker(implicit p: Parameters)
   val io = new DmaTrackerIO
 }
 
-class DmaTrackerFile(implicit p: Parameters) extends DmaModule()(p) {
+class DmaBackend(implicit p: Parameters) extends DmaModule()(p) {
   val io = new Bundle {
     val dma = (new DmaIO).flip
     val mem = Vec(nDmaTrackers, new ClientUncachedTileLinkIO)
@@ -752,18 +752,4 @@ class PipelinedDmaTracker(implicit p: Parameters) extends DmaTracker()(p)
   val respArb = Module(new RRArbiter(new DmaResponse, 2))
   respArb.io.in <> Seq(prefetch.io.dma.resp, writer.io.dma.resp)
   io.dma.resp <> respArb.io.out
-}
-
-class DmaBackend(implicit p: Parameters) extends DmaModule()(p) {
-  val io = new Bundle {
-    val dma = (new DmaIO).flip
-    val mem = new ClientUncachedTileLinkIO
-  }
-
-  val memArb = Module(new ClientUncachedTileLinkIOArbiter(nDmaTrackers))
-  val trackerFile = Module(new DmaTrackerFile)
-  
-  trackerFile.io.dma <> io.dma
-  memArb.io.in <> trackerFile.io.mem
-  io.mem <> memArb.io.out
 }

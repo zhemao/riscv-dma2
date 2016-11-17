@@ -125,11 +125,11 @@ class DmaTest(implicit p: Parameters) extends GroundTest()(p)
   val backend = Module(new DmaBackend)
 
   require(io.ptw.size == 1)
-  require(io.mem.size == 1)
+  require(io.mem.size == backend.io.mem.size)
   require(io.cache.size == 1)
 
   io.ptw.head <> frontend.io.ptw
-  io.mem.head <> backend.io.mem
+  io.mem <> backend.io.mem
   io.cache.head <> driver.io.mem
   io.status.finished := driver.io.finished
   io.status.timeout.valid := Bool(false)

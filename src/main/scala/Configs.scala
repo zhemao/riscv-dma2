@@ -15,21 +15,17 @@ class WithDma extends Config(
       RoccParameters(
         opcodes = OpcodeSet.all,
         generator = (p: Parameters) => Module(new CopyAccelerator()(p)),
-        nMemChannels = (if (site(CopyAccelShareMemChannel)) 0 else 1),
+        nMemChannels = site(NDmaTrackers),
         nPTWPorts = 1))
-    case CopyAccelShareMemChannel => Knob("CA_SHARE_MEM_CHANNEL")
     case NDmaTrackers => 1
     case NDmaXacts => 4
     case NDmaTrackerMemXacts => site(DmaTrackerPipelineDepth)
     // 3 clients (prefetch, put, get) per tracker
-    case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts) * site(NDmaTrackers)
+    case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts)
     case DmaTrackerPipelineDepth => 16
     case BuildDmaTracker => (p: Parameters) => Module(new PipelinedDmaTracker()(p))
     case SimMemLatency => 20
     case _ => throw new CDEMatchError
-  },
-  knobValues = {
-    case "CA_SHARE_MEM_CHANNEL" => false
   })
 
 class DmaConfig extends Config(new WithDma ++ new WithL2Cache ++ new BaseConfig)

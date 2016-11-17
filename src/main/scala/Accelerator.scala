@@ -7,8 +7,6 @@ import rocket._
 import cde.{Parameters, Field}
 import scala.math.max
 
-case object CopyAccelShareMemChannel extends Field[Boolean]
-
 object DmaCtrlRegNumbers {
   val SRC_STRIDE = 0
   val DST_STRIDE = 1
@@ -139,15 +137,10 @@ class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
 
   backend.io.dma <> ctrl.io.dma
 
-  if (p(CopyAccelShareMemChannel)) {
-    require(io.utl.size == 0)
-    io.autl <> backend.io.mem
-  } else {
-    require(io.utl.size == 1)
-    io.utl.head <> backend.io.mem
-    io.autl.acquire.valid := Bool(false)
-    io.autl.grant.ready := Bool(false)
-  }
+  io.utl <> backend.io.mem
+  io.autl.acquire.valid := Bool(false)
+  io.autl.grant.ready := Bool(false)
+
   io.mem.req.valid := Bool(false)
   io.mem.invalidate_lr := Bool(false)
   io.interrupt := ctrl.io.interrupt
