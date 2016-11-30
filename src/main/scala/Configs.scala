@@ -7,6 +7,7 @@ import coreplex.WithL2Cache
 import rocketchip._
 import junctions._
 import uncore.tilelink.TLKey
+import uncore.agents.CacheBlockBytes
 import cde.{Parameters, Config, Knob, CDEMatchError}
 
 class WithDma extends Config(
@@ -19,7 +20,11 @@ class WithDma extends Config(
         nPTWPorts = 1))
     case NDmaTrackers => 1
     case NDmaXacts => 4
-    case NDmaTrackerMemXacts => site(DmaTrackerPipelineDepth)
+    case NDmaTrackerMemXacts => {
+      val innerDataBits = site(XLen)
+      val innerDataBeats = (8 * site(CacheBlockBytes)) / innerDataBits
+      site(DmaTrackerPipelineDepth) / innerDataBeats
+    }
     // 3 clients (prefetch, put, get) per tracker
     case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts)
     case DmaTrackerPipelineDepth => 16
