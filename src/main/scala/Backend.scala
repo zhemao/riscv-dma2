@@ -1,10 +1,11 @@
 package dma
 
-import Chisel._
+import chisel3._
+import chisel3.util._
 import cde.{Parameters, Field}
 import junctions._
 import junctions.NastiConstants._
-import util._
+import _root_.util._
 import uncore.tilelink._
 import uncore.util._
 
@@ -27,35 +28,35 @@ abstract class DmaModule(implicit val p: Parameters) extends Module with HasDmaP
 abstract class DmaBundle(implicit val p: Parameters) extends ParameterizedBundle()(p) with HasDmaParameters
 
 class DmaRequest(implicit p: Parameters) extends DmaBundle()(p) {
-  val xact_id = UInt(width = dmaXactIdBits)
-  val cmd = UInt(width = DmaRequest.DMA_CMD_SZ)
-  val source = UInt(width = addrBits)
-  val dest = UInt(width = addrBits)
-  val length = UInt(width = addrBits)
-  val alloc = UInt(width = 2)
+  val xact_id = UInt(dmaXactIdBits.W)
+  val cmd = UInt(DmaRequest.DMA_CMD_SZ.W)
+  val source = UInt(addrBits.W)
+  val dest = UInt(addrBits.W)
+  val length = UInt(addrBits.W)
+  val alloc = UInt(2.W)
 
   def isPrefetch(dummy: Int = 0): Bool =
     cmd === DmaRequest.DMA_CMD_PFR || cmd === DmaRequest.DMA_CMD_PFW
 }
 
 class DmaResponse(implicit p: Parameters) extends DmaBundle()(p) {
-  val xact_id = UInt(width = dmaXactIdBits)
-  val status = UInt(width = dmaStatusBits)
+  val xact_id = UInt(dmaXactIdBits.W)
+  val status = UInt(dmaStatusBits.W)
 }
 
 object DmaRequest {
   val DMA_CMD_SZ = 2
 
-  val DMA_CMD_COPY = UInt("b00")
-  val DMA_CMD_PFR  = UInt("b10")
-  val DMA_CMD_PFW  = UInt("b11")
+  val DMA_CMD_COPY = "b00".U
+  val DMA_CMD_PFR  = "b10".U
+  val DMA_CMD_PFW  = "b11".U
 
-  def apply(xact_id: UInt = UInt(0),
+  def apply(xact_id: UInt = 0.U,
             cmd: UInt,
             source: UInt,
             dest: UInt,
             length: UInt,
-            alloc: UInt = UInt("b10"))(implicit p: Parameters): DmaRequest = {
+            alloc: UInt = "b10".U)(implicit p: Parameters): DmaRequest = {
     val req = Wire(new DmaRequest)
     req.xact_id := xact_id
     req.cmd := cmd
@@ -70,24 +71,24 @@ import DmaRequest._
 
 class DmaIO(implicit p: Parameters) extends DmaBundle()(p) {
   val req = Decoupled(new DmaRequest)
-  val resp = Decoupled(new DmaResponse).flip
+  val resp = Flipped(Decoupled(new DmaResponse))
 }
 
 class DmaTrackerIO(implicit p: Parameters) extends DmaBundle()(p) {
-  val dma = (new DmaIO).flip
+  val dma = Flipped(new DmaIO)
   val mem = new ClientUncachedTileLinkIO
 }
 
 abstract class DmaTracker(implicit p: Parameters)
     extends DmaModule()(p) with HasTileLinkParameters {
-  val io = new DmaTrackerIO
+  val io = IO(new DmaTrackerIO)
 }
 
 class DmaBackend(implicit p: Parameters) extends DmaModule()(p) {
-  val io = new Bundle {
-    val dma = (new DmaIO).flip
+  val io = IO(new Bundle {
+    val dma = Flipped(new DmaIO)
     val mem = Vec(nDmaTrackers, new ClientUncachedTileLinkIO)
-  }
+  })
 
   val trackers = List.fill(nDmaTrackers) { p(BuildDmaTracker)(p) }
   val reqReadys = trackers.map(_.io.dma.req.ready).asUInt
@@ -101,7 +102,7 @@ class DmaBackend(implicit p: Parameters) extends DmaModule()(p) {
 
     val selection = PriorityEncoder(reqReadys)
     trackers.zipWithIndex.foreach { case (tracker, i) =>
-      tracker.io.dma.req.valid := io.dma.req.valid && selection === UInt(i)
+      tracker.io.dma.req.valid := io.dma.req.valid && selection === i.U
       tracker.io.dma.req.bits := io.dma.req.bits
     }
     io.dma.req.ready := reqReadys.orR
@@ -115,70 +116,70 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   private val blockOffset = tlBeatAddrBits + tlByteAddrBits
   private val blockBytes = tlDataBeats * tlDataBytes
 
-  val data_buffer = Reg(Vec(2 * tlDataBeats, Bits(width = tlDataBits)))
-  val get_inflight = Reg(UInt(width = 2 * tlDataBeats))
+  val data_buffer = Reg(Vec(2 * tlDataBeats, Bits(tlDataBits.W)))
+  val get_inflight = Reg(UInt((2 * tlDataBeats).W))
   val put_inflight = Reg(Bool())
-  val put_half = Reg(UInt(width = 1))
-  val get_half = Reg(UInt(width = 1))
+  val put_half = Reg(UInt(1.W))
+  val get_half = Reg(UInt(1.W))
   val prefetch_put = Reg(Bool())
   val get_done = !get_inflight.orR
-  val alloc = Reg(UInt(width = 2))
+  val alloc = Reg(UInt(2.W))
 
-  val src_block = Reg(UInt(width = tlBlockAddrBits))
-  val dst_block = Reg(UInt(width = tlBlockAddrBits))
-  val offset    = Reg(UInt(width = blockOffset))
-  val alignment = Reg(UInt(width = blockOffset))
+  val src_block = Reg(UInt(tlBlockAddrBits.W))
+  val dst_block = Reg(UInt(tlBlockAddrBits.W))
+  val offset    = Reg(UInt(blockOffset.W))
+  val alignment = Reg(UInt(blockOffset.W))
   val shift_dir = Reg(Bool())
 
-  val bytes_left = Reg(UInt(width = addrBits))
+  val bytes_left = Reg(UInt(addrBits.W))
 
   val acq = io.mem.acquire.bits
   val gnt = io.mem.grant.bits
 
   val (s_idle :: s_get :: s_put :: s_prefetch ::
-       s_wait :: s_resp :: Nil) = Enum(Bits(), 6)
+       s_wait :: s_resp :: Nil) = Enum(6)
   val state = Reg(init = s_idle)
 
   val (put_beat, put_done) = Counter(
     io.mem.acquire.fire() && acq.hasData(), tlDataBeats)
 
   val put_mask = Seq.tabulate(tlDataBytes) { i =>
-    val byte_index = Cat(put_beat, UInt(i, tlByteAddrBits))
+    val byte_index = Cat(put_beat, i.U(tlByteAddrBits.W))
     byte_index >= offset && byte_index < bytes_left
   }.asUInt
 
   val prefetch_sent = io.mem.acquire.fire() && io.mem.acquire.bits.isPrefetch()
-  val prefetch_busy = Reg(init = UInt(0, nDmaTrackerMemXacts))
+  val prefetch_busy = Reg(init = 0.U(nDmaTrackerMemXacts.W))
   val (prefetch_id, _) = Counter(prefetch_sent, nDmaTrackerMemXacts)
 
   val base_index = Cat(put_half, put_beat)
   val put_data = Wire(init = Bits(0, tlDataBits))
   val beat_align = alignment(blockOffset - 1, tlByteAddrBits)
-  val bit_align = Cat(alignment(tlByteAddrBits - 1, 0), UInt(0, 3))
-  val rev_align = UInt(tlDataBits) - bit_align
+  val bit_align = Cat(alignment(tlByteAddrBits - 1, 0), 0.U(3.W))
+  val rev_align = tlDataBits.U - bit_align
 
   def getBit(value: UInt, sel: UInt): Bool =
     (value >> sel)(0)
 
-  when (alignment === UInt(0)) {
+  when (alignment === 0.U) {
     put_data := data_buffer(base_index)
   } .elsewhen (shift_dir) {
     val shift_index = base_index - beat_align
-    when (bit_align === UInt(0)) {
+    when (bit_align === 0.U) {
       put_data := data_buffer(shift_index)
     } .otherwise {
       val upper_bits = data_buffer(shift_index)
-      val lower_bits = data_buffer(shift_index - UInt(1))
+      val lower_bits = data_buffer(shift_index - 1.U)
       val upper_shifted = upper_bits << bit_align
       val lower_shifted = lower_bits >> rev_align
       put_data := upper_shifted | lower_shifted
     }
   } .otherwise {
     val shift_index = base_index + beat_align
-    when (bit_align === UInt(0)) {
+    when (bit_align === 0.U) {
       put_data := data_buffer(shift_index)
     } .otherwise {
-      val upper_bits = data_buffer(shift_index + UInt(1))
+      val upper_bits = data_buffer(shift_index + 1.U)
       val lower_bits = data_buffer(shift_index)
       val upper_shifted = upper_bits << rev_align
       val lower_shifted = lower_bits >> bit_align
@@ -187,7 +188,7 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   }
 
   val put_acquire = PutBlock(
-    client_xact_id = UInt(2),
+    client_xact_id = 2.U,
     addr_block = dst_block,
     addr_beat = put_beat,
     data = put_data,
@@ -203,7 +204,7 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
     PutPrefetch(client_xact_id = prefetch_id, addr_block = dst_block),
     GetPrefetch(client_xact_id = prefetch_id, addr_block = dst_block))
 
-  val resp_xact_id = Reg(UInt(width = dmaXactIdBits))
+  val resp_xact_id = Reg(UInt(dmaXactIdBits.W))
 
   io.mem.acquire.valid := (state === s_get) ||
                           (state === s_put && get_done) ||
@@ -212,11 +213,11 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
     state, prefetch_acquire, Seq(
       s_get -> get_acquire,
       s_put -> put_acquire))
-  io.mem.grant.ready := Bool(true)
+  io.mem.grant.ready := true.B
   io.dma.req.ready := state === s_idle
   io.dma.resp.valid := state === s_resp
   io.dma.resp.bits.xact_id := resp_xact_id
-  io.dma.resp.bits.status := UInt(0)
+  io.dma.resp.bits.status := 0.U
 
   when (io.dma.req.fire()) {
     val src_off = io.dma.req.bits.source(blockOffset - 1, 0)
@@ -230,10 +231,10 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
     shift_dir := direction
     offset := dst_off
     bytes_left := io.dma.req.bits.length + dst_off
-    get_inflight := UInt(0)
-    put_inflight := Bool(false)
-    get_half := UInt(0)
-    put_half := UInt(0)
+    get_inflight := 0.U
+    put_inflight := false.B
+    get_half := 0.U
+    put_half := 0.U
     alloc    := io.dma.req.bits.alloc
 
     when (io.dma.req.bits.cmd === DMA_CMD_COPY) {
@@ -242,29 +243,29 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
       prefetch_put := io.dma.req.bits.cmd(0)
       state := s_prefetch
     } .otherwise {
-      assert(Bool(false), "Unknown DMA command")
+      assert(false.B, "Unknown DMA command")
     }
   }
 
   when (state === s_get && io.mem.acquire.ready) {
     get_inflight := get_inflight | FillInterleaved(tlDataBeats, UIntToOH(get_half))
-    src_block := src_block + UInt(1)
-    val bytes_in_buffer = UInt(blockBytes) - alignment
-    val extra_read = alignment > UInt(0) && !shift_dir && // dst_off < src_off
-                     get_half === UInt(0) && // this is the first block
+    src_block := src_block + 1.U
+    val bytes_in_buffer = blockBytes.U - alignment
+    val extra_read = alignment > 0.U && !shift_dir && // dst_off < src_off
+                     get_half === 0.U && // this is the first block
                      bytes_in_buffer < bytes_left // there is still more data left to fetch
-    get_half := get_half + UInt(1)
+    get_half := get_half + 1.U
     when (!extra_read) { state := s_put }
   }
 
   when (prefetch_sent) {
     prefetch_busy := prefetch_busy | UIntToOH(prefetch_id)
-    when (bytes_left < UInt(blockBytes)) {
-      bytes_left := UInt(0)
+    when (bytes_left < blockBytes.U) {
+      bytes_left := 0.U
       state := s_wait
     } .otherwise {
-      bytes_left := bytes_left - UInt(blockBytes)
-      dst_block := dst_block + UInt(1)
+      bytes_left := bytes_left - blockBytes.U
+      dst_block := dst_block + 1.U
     }
   }
 
@@ -277,25 +278,25 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
       get_inflight := get_inflight & ~UIntToOH(write_idx)
       data_buffer(write_idx) := gnt.data
     } .otherwise {
-      put_inflight := Bool(false)
+      put_inflight := false.B
     }
   }
 
   when (put_done) { // state === s_put
-    put_half := put_half + UInt(1)
-    offset := UInt(0)
-    when (bytes_left < UInt(blockBytes)) {
-      bytes_left := UInt(0)
+    put_half := put_half + 1.U
+    offset := 0.U
+    when (bytes_left < blockBytes.U) {
+      bytes_left := 0.U
     } .otherwise {
-      bytes_left := bytes_left - UInt(blockBytes)
+      bytes_left := bytes_left - blockBytes.U
     }
-    put_inflight := Bool(true)
-    dst_block := dst_block + UInt(1)
+    put_inflight := true.B
+    dst_block := dst_block + 1.U
     state := s_wait
   }
 
   when (state === s_wait && get_done && !put_inflight && !prefetch_busy.orR) {
-    state := Mux(bytes_left === UInt(0), s_resp, s_get)
+    state := Mux(bytes_left === 0.U, s_resp, s_get)
   }
 
   when (io.dma.resp.fire()) { state := s_idle }
@@ -311,14 +312,14 @@ trait PipelineUtils {
 
   def incWrap(cur: UInt, inc: UInt): UInt = {
     val unwrapped = cur +& inc
-    Mux(unwrapped >= UInt(pipelineDepth), unwrapped - UInt(pipelineDepth), unwrapped)
+    Mux(unwrapped >= pipelineDepth.U, unwrapped - pipelineDepth.U, unwrapped)
   }
 }
 
 class PipelinePacket(implicit p: Parameters)
     extends DmaBundle()(p) with HasTileLinkParameters {
-  val data = UInt(width = tlDataBits)
-  val bytes = UInt(width = log2Up(tlDataBytes))
+  val data = UInt(tlDataBits.W)
+  val bytes = UInt(log2Up(tlDataBytes).W)
 }
 
 class ReservationRequest extends Bundle {
@@ -327,54 +328,54 @@ class ReservationRequest extends Bundle {
 
 class ReservationResponse(implicit val p: Parameters) extends ParameterizedBundle()(p)
     with PipelineUtils {
-  val idx = UInt(width = pipelineIdxBits)
+  val idx = UInt(pipelineIdxBits.W)
 }
 
 class ReservationData(implicit p: Parameters) extends TLBundle()(p)
     with PipelineUtils {
-  val data = UInt(width = tlDataBits)
-  val bytes = UInt(width = tlByteAddrBits)
-  val idx = UInt(width = pipelineIdxBits)
+  val data = UInt(tlDataBits.W)
+  val bytes = UInt(tlByteAddrBits.W)
+  val idx = UInt(pipelineIdxBits.W)
 }
 
 class ReservationInputIO(implicit p: Parameters) extends ParameterizedBundle()(p) {
   val req = Decoupled(new ReservationRequest)
-  val resp = Decoupled(new ReservationResponse).flip
+  val resp = Flipped(Decoupled(new ReservationResponse))
   val data = Decoupled(new ReservationData)
 }
 
 class ReservationOutputIO(implicit val p: Parameters) extends ParameterizedBundle()(p)
     with PipelineUtils {
-  val count = UInt(OUTPUT, pipelineCountBits)
+  val count = UInt(pipelineCountBits.W)
   val data = Decoupled(new PipelinePacket)
 }
 
 class ReservationQueue(implicit p: Parameters) extends TLModule()(p)
     with PipelineUtils {
-  val io = new Bundle {
-    val in = (new ReservationInputIO).flip
+  val io = IO(new Bundle {
+    val in = Flipped(new ReservationInputIO)
     val out = new ReservationOutputIO
-  }
+  })
 
   val req = Queue(io.in.req, 1)
 
   val pkt_buffer = Mem(pipelineDepth, new PipelinePacket)
-  val pkt_valid = Reg(init = UInt(0, pipelineDepth))
+  val pkt_valid = Reg(init = 0.U(pipelineDepth.W))
 
-  val head = Reg(init = UInt(0, pipelineIdxBits))
-  val tail = Reg(init = UInt(0, pipelineIdxBits))
-  val count = Reg(init = UInt(0, pipelineCountBits))
+  val head = Reg(init = 0.U(pipelineIdxBits.W))
+  val tail = Reg(init = 0.U(pipelineIdxBits.W))
+  val count = Reg(init = 0.U(pipelineCountBits.W))
 
-  val req_count = Mux(req.bits.multibeat, UInt(tlDataBeats), UInt(1))
-  count := count + Mux(req.fire(), req_count, UInt(0)) - io.out.data.fire()
+  val req_count = Mux(req.bits.multibeat, tlDataBeats.U, 1.U)
+  count := count + Mux(req.fire(), req_count, 0.U) - io.out.data.fire()
 
-  val full = (count + req_count) > UInt(pipelineDepth)
+  val full = (count + req_count) > pipelineDepth.U
 
   req.ready := io.in.resp.ready && !full
   io.in.resp.valid := req.valid && !full
   io.in.resp.bits.idx := tail
 
-  io.in.data.ready := Bool(true)
+  io.in.data.ready := true.B
   io.out.data.valid := (pkt_valid >> head)(0)
   io.out.data.bits := pkt_buffer(head)
   io.out.count := count // count is amount allocated, not amount stored
@@ -391,39 +392,39 @@ class ReservationQueue(implicit p: Parameters) extends TLModule()(p)
   }
 
   when (io.out.data.fire()) {
-    head := incWrap(head, UInt(1))
+    head := incWrap(head, 1.U)
   }
 
   pkt_valid := (pkt_valid &
-    ~Mux(io.out.data.fire(), UIntToOH(head), UInt(0))) |
-    Mux(io.in.data.fire(), UIntToOH(io.in.data.bits.idx), UInt(0))
+    ~Mux(io.out.data.fire(), UIntToOH(head), 0.U)) |
+    Mux(io.in.data.fire(), UIntToOH(io.in.data.bits.idx), 0.U)
 }
 
 class PipelinedDmaTrackerPrefetcher(implicit p: Parameters)
     extends DmaModule()(p) with HasTileLinkParameters {
-  val io = new Bundle {
-    val dma = (new DmaIO).flip
+  val io = IO(new Bundle {
+    val dma = Flipped(new DmaIO)
     val mem = new ClientUncachedTileLinkIO
-  }
+  })
 
   private val blockOffset = tlBeatAddrBits + tlByteAddrBits
   private val blockBytes = tlDataBeats * tlDataBytes
 
-  val dst_block = Reg(UInt(width = tlBlockAddrBits))
-  val bytes_left = Reg(UInt(width = addrBits))
+  val dst_block = Reg(UInt(tlBlockAddrBits.W))
+  val bytes_left = Reg(UInt(addrBits.W))
 
   val prefetch_put = Reg(Bool())
-  val prefetch_busy = Reg(UInt(width = nDmaTrackerMemXacts), init = UInt(0))
+  val prefetch_busy = Reg(UInt(nDmaTrackerMemXacts.W), init = 0.U)
   val prefetch_id_onehot = PriorityEncoderOH(~prefetch_busy)
   val prefetch_id = OHToUInt(prefetch_id_onehot)
 
-  val dma_req_id = Reg(io.dma.req.bits.xact_id)
+  val dma_req_id = Reg(io.dma.req.bits.xact_id.cloneType)
 
   prefetch_busy := (prefetch_busy |
-    Mux(io.mem.acquire.fire(), UIntToOH(prefetch_id), UInt(0))) &
-    ~Mux(io.mem.grant.fire(), UIntToOH(io.mem.grant.bits.client_xact_id), UInt(0))
+    Mux(io.mem.acquire.fire(), UIntToOH(prefetch_id), 0.U)) &
+    ~Mux(io.mem.grant.fire(), UIntToOH(io.mem.grant.bits.client_xact_id), 0.U)
 
-  val s_idle :: s_prefetch :: s_resp :: Nil = Enum(Bits(), 3)
+  val s_idle :: s_prefetch :: s_resp :: Nil = Enum(3)
   val state = Reg(init = s_idle)
 
   io.mem.acquire.valid := (state === s_prefetch) && !prefetch_busy.andR
@@ -435,7 +436,7 @@ class PipelinedDmaTrackerPrefetcher(implicit p: Parameters)
   io.dma.req.ready := state === s_idle
   io.dma.resp.valid := (state === s_resp) && !prefetch_busy.orR
   io.dma.resp.bits.xact_id := dma_req_id
-  io.dma.resp.bits.status := UInt(0)
+  io.dma.resp.bits.status := 0.U
 
   when (io.dma.req.fire()) {
     val dst_off = io.dma.req.bits.dest(blockOffset - 1, 0)
@@ -446,12 +447,12 @@ class PipelinedDmaTrackerPrefetcher(implicit p: Parameters)
   }
 
   when (io.mem.acquire.fire()) {
-    when (bytes_left < UInt(blockBytes)) {
-      bytes_left := UInt(0)
+    when (bytes_left < blockBytes.U) {
+      bytes_left := 0.U
       state := s_resp
     } .otherwise {
-      bytes_left := bytes_left - UInt(blockBytes)
-      dst_block := dst_block + UInt(1)
+      bytes_left := bytes_left - blockBytes.U
+      dst_block := dst_block + 1.U
     }
   }
 
@@ -463,35 +464,35 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
     with HasTileLinkParameters
     with PipelineUtils {
 
-  val io = new Bundle {
-    val dma_req = Decoupled(new DmaRequest).flip
+  val io = IO(new Bundle {
+    val dma_req = Flipped(Decoupled(new DmaRequest))
     val mem = new ClientUncachedTileLinkIO
     val res = new ReservationInputIO
-  }
+  })
 
   private val blockOffset = tlBeatAddrBits + tlByteAddrBits
   private val blockBytes = tlDataBeats * tlDataBytes
 
-  val src_addr = Reg(UInt(width = addrBits))
+  val src_addr = Reg(UInt(addrBits.W))
   val src_block = src_addr(addrBits - 1, blockOffset)
   val src_beat = src_addr(blockOffset - 1, tlByteAddrBits)
   val src_byte_off = src_addr(tlByteAddrBits - 1, 0)
-  val bytes_left = Reg(UInt(width = addrBits))
+  val bytes_left = Reg(UInt(addrBits.W))
 
-  val s_idle :: s_reserve :: s_mem_req :: Nil = Enum(Bits(), 3)
+  val s_idle :: s_reserve :: s_mem_req :: Nil = Enum(3)
   val state = Reg(init = s_idle)
 
-  val get_busy = Reg(init = UInt(0, nDmaTrackerMemXacts))
-  val byte_offset = Mem(nDmaTrackerMemXacts, UInt(width = tlByteAddrBits))
-  val bytes_valid = Mem(nDmaTrackerMemXacts, UInt(width = tlByteAddrBits))
+  val get_busy = Reg(init = 0.U(nDmaTrackerMemXacts.W))
+  val byte_offset = Mem(nDmaTrackerMemXacts, UInt(tlByteAddrBits.W))
+  val bytes_valid = Mem(nDmaTrackerMemXacts, UInt(tlByteAddrBits.W))
   val get_id_onehot = PriorityEncoderOH(~get_busy)
-  val get_id = Reg(UInt(width = log2Up(nDmaTrackerMemXacts)))
-  val data_index = Reg(Vec(nDmaTrackerMemXacts, UInt(width = log2Up(pipelineDepth))))
+  val get_id = Reg(UInt(log2Up(nDmaTrackerMemXacts).W))
+  val data_index = Reg(Vec(nDmaTrackerMemXacts, UInt(log2Up(pipelineDepth).W)))
 
   val alloc = Reg(Bool())
   val send_block =
-    src_beat === UInt(0) && src_byte_off === UInt(0) &&
-    bytes_left >= UInt(blockBytes)
+    src_beat === 0.U && src_byte_off === 0.U &&
+    bytes_left >= blockBytes.U
 
   io.dma_req.ready := (state === s_idle)
 
@@ -513,18 +514,18 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
 
   when (io.mem.acquire.fire()) {
     val bytes_to_read =
-      Mux(send_block, UInt(blockBytes), UInt(tlDataBytes) - src_byte_off)
+      Mux(send_block, blockBytes.U, tlDataBytes.U - src_byte_off)
 
     src_addr := src_addr + bytes_to_read
     byte_offset(get_id) := src_byte_off
-    bytes_valid(get_id) := Mux(bytes_to_read > UInt(tlDataBytes), UInt(0),
+    bytes_valid(get_id) := Mux(bytes_to_read > tlDataBytes.U, 0.U,
                            Mux(bytes_to_read < bytes_left, bytes_to_read, bytes_left))
 
     when (bytes_left > bytes_to_read) {
       bytes_left := bytes_left - bytes_to_read
       state := s_reserve
     } .otherwise {
-      bytes_left := UInt(0)
+      bytes_left := 0.U
       state := s_idle
     }
   }
@@ -547,19 +548,19 @@ class PipelinedDmaTrackerReader(implicit p: Parameters)
 
   val grant_id = io.mem.grant.bits.client_xact_id
 
-  get_busy := (get_busy | Mux(io.res.req.fire(), get_id_onehot, UInt(0))) &
+  get_busy := (get_busy | Mux(io.res.req.fire(), get_id_onehot, 0.U)) &
                           ~Mux(io.mem.grant.fire() && io.mem.grant.bits.last(),
-                            UIntToOH(grant_id), UInt(0))
+                            UIntToOH(grant_id), 0.U)
 
   when (io.res.data.fire()) {
-    data_index(grant_id) := incWrap(data_index(grant_id), UInt(1))
+    data_index(grant_id) := incWrap(data_index(grant_id), 1.U)
   }
 
   io.mem.grant.ready := io.res.data.ready
   io.res.data.valid := io.mem.grant.valid
   io.res.data.bits.idx := data_index(grant_id)
-  io.res.data.bits.data := io.mem.grant.bits.data >> Cat(byte_offset(grant_id), UInt(0, 3))
-  io.res.data.bits.bytes := bytes_valid(grant_id) - UInt(1)
+  io.res.data.bits.data := io.mem.grant.bits.data >> Cat(byte_offset(grant_id), 0.U(3.W))
+  io.res.data.bits.bytes := bytes_valid(grant_id) - 1.U
 }
 
 class PipelinedDmaTrackerWriter(implicit p: Parameters)
@@ -567,64 +568,63 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
 
   val pipelineDepth = p(DmaTrackerPipelineDepth)
 
-  val io = new Bundle {
-    val dma = (new DmaIO).flip
+  val io = IO(new Bundle {
+    val dma = Flipped(new DmaIO)
     val mem = new ClientUncachedTileLinkIO
-    val pipe = (new ReservationOutputIO).flip
-  }
+    val pipe = Flipped(new ReservationOutputIO)
+  })
 
   private val blockOffset = tlBeatAddrBits + tlByteAddrBits
   private val blockBytes = tlDataBeats * tlDataBytes
 
-  val dst_addr = Reg(UInt(width = addrBits))
+  val dst_addr = Reg(UInt(addrBits.W))
   val dst_block = dst_addr(addrBits - 1, blockOffset)
   val dst_beat = dst_addr(blockOffset - 1, tlByteAddrBits)
   val dst_byte_off = dst_addr(tlByteAddrBits - 1, 0)
-  val bytes_left = Reg(UInt(width = addrBits))
+  val bytes_left = Reg(UInt(addrBits.W))
 
   val dma_req_id = Reg(io.dma.req.bits.xact_id)
 
-  val s_idle :: s_mem_req :: s_resp :: Nil = Enum(Bits(), 3)
+  val s_idle :: s_mem_req :: s_resp :: Nil = Enum(3)
   val state = Reg(init = s_idle)
 
-  val last_data = Reg(UInt(width = tlDataBits))
-  val last_bytes_val = Reg(UInt(width = log2Up(tlDataBytes) + 1))
+  val last_data = Reg(UInt(tlDataBits.W))
+  val last_bytes_val = Reg(UInt((log2Up(tlDataBytes) + 1).W))
 
-  val put_busy = Reg(UInt(width = nDmaTrackerMemXacts), init = UInt(0))
+  val put_busy = Reg(UInt(nDmaTrackerMemXacts.W), init = 0.U)
   val put_id_onehot = PriorityEncoderOH(~put_busy)
   val put_id = OHToUInt(put_id_onehot)
   val put_block_id = RegEnable(put_id, io.mem.acquire.fire() && io.mem.acquire.bits.first())
 
-  val off_size = MuxCase(UInt(log2Up(tlDataBytes)),
+  val off_size = MuxCase(log2Up(tlDataBytes).U,
     (0 until log2Up(tlDataBytes))
-      .map(place => (dst_addr(place) -> UInt(place))))
+      .map(place => (dst_addr(place) -> place.U)))
 
   val data = last_data | Mux(io.pipe.data.valid,
-    (io.pipe.data.bits.data << Cat(last_bytes_val, UInt(0, 3))),
-    UInt(0))
+    (io.pipe.data.bits.data << Cat(last_bytes_val, 0.U(3.W))), 0.U)
   val bytes_val = Mux(io.pipe.data.valid,
-    last_bytes_val + io.pipe.data.bits.bytes + UInt(1),
+    last_bytes_val + io.pipe.data.bits.bytes + 1.U,
     last_bytes_val)
 
   val bytes_val_size = Log2(bytes_val)
   val size = Mux(bytes_val_size < off_size, bytes_val_size, off_size)
   val storegen = new StoreGen(size, dst_addr, data, tlDataBytes)
 
-  val off_true_size = UInt(1) << off_size
+  val off_true_size = 1.U << off_size
   val needs_more = (bytes_val < off_true_size) && (bytes_val < bytes_left)
   val flush_buffer = (last_bytes_val >= bytes_left)
 
-  val send_block = Reg(init = Bool(false))
+  val send_block = Reg(init = false.B)
   val alloc = Reg(Bool())
-  val block_acquire = send_block && (io.pipe.count < (UInt(tlDataBeats) - dst_beat))
+  val block_acquire = send_block && (io.pipe.count < (tlDataBeats.U - dst_beat))
   val acquire_ok = (state === s_mem_req) &&
-                   (!put_busy.andR || send_block && dst_beat =/= UInt(0)) &&
+                   (!put_busy.andR || send_block && dst_beat =/= 0.U) &&
                    !block_acquire
 
   io.mem.acquire.valid := acquire_ok && !needs_more && (io.pipe.data.valid || flush_buffer)
   io.mem.acquire.bits := Mux(send_block,
     PutBlock(
-      client_xact_id = Mux(dst_beat === UInt(0), put_id, put_block_id),
+      client_xact_id = Mux(dst_beat === 0.U, put_id, put_block_id),
       addr_block = dst_block,
       addr_beat = dst_beat,
       data = storegen.data,
@@ -641,24 +641,24 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   io.pipe.data.ready := (acquire_ok && io.mem.acquire.ready && !flush_buffer) || needs_more
 
   put_busy := (put_busy |
-    Mux(io.mem.acquire.fire() && io.mem.acquire.bits.first(), UIntToOH(put_id), UInt(0))) &
-    ~Mux(io.mem.grant.fire(), UIntToOH(io.mem.grant.bits.client_xact_id), UInt(0))
+    Mux(io.mem.acquire.fire() && io.mem.acquire.bits.first(), UIntToOH(put_id), 0.U)) &
+    ~Mux(io.mem.grant.fire(), UIntToOH(io.mem.grant.bits.client_xact_id), 0.U)
 
   io.dma.req.ready := (state === s_idle)
 
   io.dma.resp.valid := (state === s_resp) && !put_busy.orR
   io.dma.resp.bits.xact_id := dma_req_id
-  io.dma.resp.bits.status := UInt(0)
+  io.dma.resp.bits.status := 0.U
 
   when (io.dma.req.fire()) {
     dma_req_id := io.dma.req.bits.xact_id
     dst_addr := io.dma.req.bits.dest
     bytes_left := io.dma.req.bits.length
-    last_data := UInt(0)
-    last_bytes_val := UInt(0)
+    last_data := 0.U
+    last_bytes_val := 0.U
     alloc := io.dma.req.bits.alloc(1)
-    send_block := io.dma.req.bits.dest(blockOffset - 1, 0) === UInt(0) &&
-                  io.dma.req.bits.length >= UInt(blockBytes)
+    send_block := io.dma.req.bits.dest(blockOffset - 1, 0) === 0.U &&
+                  io.dma.req.bits.length >= blockBytes.U
     state := s_mem_req
   }
 
@@ -668,21 +668,21 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   }
 
   when (io.mem.acquire.fire()) {
-    val true_size = UInt(1) << size
+    val true_size = 1.U << size
     val next_addr = dst_addr + true_size
     val next_bytes_left = bytes_left - true_size
 
     last_bytes_val := bytes_val - true_size
-    last_data := data >> Cat(true_size, UInt(0, 3))
+    last_data := data >> Cat(true_size, 0.U(3.W))
     bytes_left := next_bytes_left
     dst_addr := next_addr
 
-    when (next_bytes_left === UInt(0)) {
+    when (next_bytes_left === 0.U) {
       state := s_resp
     }
 
-    when (next_addr(blockOffset - 1, 0) === UInt(0)) {
-      send_block := next_bytes_left >= UInt(blockBytes)
+    when (next_addr(blockOffset - 1, 0) === 0.U) {
+      send_block := next_bytes_left >= blockBytes.U
     }
   }
 
@@ -707,7 +707,7 @@ class PipelinedDmaTracker(implicit p: Parameters) extends DmaTracker()(p)
   resq.io.in <> reader.io.res
   writer.io.pipe <> resq.io.out
 
-  val s_idle :: s_prefetch :: s_read :: s_write :: Nil = Enum(Bits(), 4)
+  val s_idle :: s_prefetch :: s_read :: s_write :: Nil = Enum(4)
   val state = Reg(init = s_idle)
 
   val is_prefetch = io.dma.req.bits.isPrefetch()

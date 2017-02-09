@@ -1,12 +1,13 @@
 package dma
 
-import Chisel._
+import chisel3._
+import chisel3.util._
 import groundtest._
 import rocket.{TLBPTWIO, HasCoreParameters}
 import uncore.tilelink._
 import uncore.agents.CacheBlockBytes
 import uncore.constants._
-import util._
+import _root_.util._
 import junctions.PAddrBits
 import rocket._
 import cde.{Parameters, Field}
@@ -24,12 +25,12 @@ case object DmaTestKey extends Field[DmaTestParameters]
 class DmaTestDriver(implicit val p: Parameters)
     extends Module with HasTileLinkParameters {
 
-  val io = new Bundle {
+  val io = IO(new Bundle {
     val mem = new HellaCacheIO
     val dma = new ClientDmaIO
-    val busy = Bool(INPUT)
-    val finished = Bool(OUTPUT)
-  }
+    val busy = Input(Bool())
+    val finished = Output(Bool())
+  })
 
   val testParams = p(DmaTestKey)
   require(Seq(
@@ -44,41 +45,41 @@ class DmaTestDriver(implicit val p: Parameters)
 
   val (word_cnt, word_flip) = Counter(io.mem.resp.valid, testParams.segment_size / 4)
   val (segment_cnt, segment_flip) = Counter(word_flip, testParams.nsegments)
-  val segment_base = Reg(UInt(width = p(PAddrBits)))
-  val test_data = Wire(UInt(width = 32))
+  val segment_base = Reg(UInt(p(PAddrBits).W))
+  val test_data = Wire(UInt(32.W))
   test_data := Cat(segment_cnt, word_cnt)
 
   val (s_idle :: s_put_req :: s_put_resp ::
        s_dma_req :: s_dma_resp :: s_wait ::
-       s_get_req :: s_get_resp :: s_done :: Nil) = Enum(Bits(), 9)
+       s_get_req :: s_get_resp :: s_done :: Nil) = Enum(9)
   val state = Reg(init = s_idle)
 
   io.mem.req.valid := state.isOneOf(s_put_req, s_get_req)
-  io.mem.req.bits.addr := segment_base + Cat(word_cnt, UInt(0, 2))
+  io.mem.req.bits.addr := segment_base + Cat(word_cnt, 0.U(2.W))
   io.mem.req.bits.cmd := Mux(state === s_put_req, M_XWR, M_XRD)
   io.mem.req.bits.typ := MT_WU
   io.mem.req.bits.data := test_data
-  io.mem.req.bits.tag := UInt(0)
+  io.mem.req.bits.tag := 0.U
   io.mem.req.bits.phys := Bool(false)
   io.mem.invalidate_lr := Bool(false)
 
   io.dma.req.valid := (state === s_dma_req)
   io.dma.req.bits := ClientDmaRequest(
     cmd = DmaRequest.DMA_CMD_COPY,
-    src_start = UInt(testParams.src_start),
-    dst_start = UInt(testParams.dst_start),
-    segment_size = UInt(testParams.segment_size),
-    nsegments = UInt(testParams.nsegments),
-    src_stride = UInt(testParams.src_stride),
-    dst_stride = UInt(testParams.dst_stride))
+    src_start = testParams.src_start.U,
+    dst_start = testParams.dst_start.U,
+    segment_size = testParams.segment_size.U,
+    nsegments = testParams.nsegments.U,
+    src_stride = testParams.src_stride.U,
+    dst_stride = testParams.dst_stride.U)
 
-  assert(!io.dma.resp.valid || io.dma.resp.bits.status === UInt(0),
+  assert(!io.dma.resp.valid || io.dma.resp.bits.status === 0.U,
     "DMA frontend returned non-zero status")
 
   io.finished := (state === s_done)
 
   when (state === s_idle) {
-    segment_base := UInt(testParams.src_start)
+    segment_base := testParams.src_start.U
     state := s_put_req
   }
   when (state === s_put_req && io.mem.req.ready) {
@@ -88,15 +89,14 @@ class DmaTestDriver(implicit val p: Parameters)
     when (segment_flip) {
       state := s_dma_req
     } .elsewhen (word_flip) {
-      segment_base := segment_base + UInt(
-        testParams.segment_size + testParams.src_stride)
+      segment_base := segment_base + (testParams.segment_size + testParams.src_stride).U
       state := s_put_req
     } .otherwise { state := s_put_req }
   }
   when (io.dma.req.fire()) { state := s_dma_resp }
   when (state === s_dma_resp && io.dma.resp.valid) { state := s_wait }
   when (state === s_wait && !io.busy) {
-    segment_base := UInt(testParams.dst_start)
+    segment_base := testParams.dst_start.U
     state := s_get_req
   }
   when (state === s_get_req && io.mem.req.ready) {
@@ -106,8 +106,7 @@ class DmaTestDriver(implicit val p: Parameters)
     when (segment_flip) {
       state := s_done
     } .elsewhen (word_flip) {
-      segment_base := segment_base + UInt(
-        testParams.segment_size + testParams.dst_stride)
+      segment_base := segment_base + (testParams.segment_size + testParams.dst_stride).U
       state := s_get_req
     } .otherwise { state := s_get_req }
   }

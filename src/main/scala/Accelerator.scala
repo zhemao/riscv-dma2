@@ -1,6 +1,7 @@
 package dma
 
-import Chisel._
+import chisel3._
+import chisel3.util._
 import rocket.RoCC
 import uncore.tilelink._
 import rocket._
@@ -23,31 +24,31 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
 
   private val nRegs = 7
 
-  val io = new Bundle {
-    val wen = Bool(INPUT)
-    val rwaddr = UInt(INPUT, log2Up(nRegs))
-    val wdata = UInt(INPUT, dmaSegmentSizeBits)
-    val rdata = UInt(OUTPUT, dmaSegmentSizeBits)
-    val set = Bool(INPUT)
-    val clear = Bool(INPUT)
+  val io = IO(new Bundle {
+    val wen = Input(Bool())
+    val rwaddr = Input(UInt(log2Up(nRegs).W))
+    val wdata = Input(UInt(dmaSegmentSizeBits.W))
+    val rdata = Output(UInt(dmaSegmentSizeBits.W))
+    val set = Input(Bool())
+    val clear = Input(Bool())
 
-    val src_stride = UInt(OUTPUT, dmaSegmentSizeBits)
-    val dst_stride = UInt(OUTPUT, dmaSegmentSizeBits)
-    val segment_size = UInt(OUTPUT, dmaSegmentSizeBits)
-    val nsegments = UInt(OUTPUT, dmaSegmentBits)
-    val alloc = UInt(OUTPUT, 2)
-    val pause = Bool(OUTPUT)
+    val src_stride = Output(UInt(dmaSegmentSizeBits.W))
+    val dst_stride = Output(UInt(dmaSegmentSizeBits.W))
+    val segment_size = Output(UInt(dmaSegmentSizeBits.W))
+    val nsegments = Output(UInt(dmaSegmentBits.W))
+    val alloc = Output(UInt(2.W))
+    val pause = Output(Bool())
 
-    val dma_resp = Valid(new ClientDmaResponse).flip
-    val error = Bool(OUTPUT)
-  }
+    val dma_resp = Flipped(Valid(new ClientDmaResponse))
+    val error = Output(Bool())
+  })
 
   val regSize = max(dmaSegmentSizeBits, vpnBits)
-  val regs = Reg(Vec(nRegs, UInt(width = regSize)))
+  val regs = Reg(Vec(nRegs, UInt(regSize.W)))
 
   when (reset) {
-    regs(ACCEL_CTRL) := UInt("b010")
-    regs(RESP_STATUS) := UInt(0)
+    regs(ACCEL_CTRL) := "b010".U
+    regs(RESP_STATUS) := 0.U
   }
 
   io.src_stride := regs(SRC_STRIDE)
@@ -68,27 +69,27 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
   }
 
   io.rdata := regs(io.rwaddr)
-  io.error := regs(RESP_STATUS) =/= UInt(0)
+  io.error := regs(RESP_STATUS) =/= 0.U
 }
 
 class DmaController(implicit val p: Parameters) extends Module
     with HasClientDmaParameters {
-  val io = new Bundle {
-    val cmd = Decoupled(new RoCCCommand).flip
+  val io = IO(new Bundle {
+    val cmd = Flipped(Decoupled(new RoCCCommand))
     val resp = Decoupled(new RoCCResponse)
     val ptw = new TLBPTWIO
     val dma = new DmaIO
-    val busy = Bool(OUTPUT)
-    val interrupt = Bool(OUTPUT)
-  }
+    val busy = Output(Bool())
+    val interrupt = Output(Bool())
+  })
 
   val cmd = Queue(io.cmd)
   val inst = cmd.bits.inst
-  val is_transfer = inst.funct < UInt(4)
-  val is_cr_read = inst.funct === UInt(4)
-  val is_cr_write = inst.funct >= UInt(5) && inst.funct <= UInt(7)
-  val is_cr_set = inst.funct === UInt(6)
-  val is_cr_clear = inst.funct === UInt(7)
+  val is_transfer = inst.funct < 4.U
+  val is_cr_read = inst.funct === 4.U
+  val is_cr_write = inst.funct >= 5.U && inst.funct <= 7.U
+  val is_cr_set = inst.funct === 6.U
+  val is_cr_clear = inst.funct === 7.U
 
   val crfile = Module(new DmaCtrlRegFile)
   val frontend = Module(new DmaFrontend)
@@ -115,7 +116,7 @@ class DmaController(implicit val p: Parameters) extends Module
   io.ptw <> frontend.io.ptw
   io.dma <> frontend.io.dma
   io.busy := cmd.valid || frontend.io.busy
-  io.interrupt := Bool(false)
+  io.interrupt := false.B
 
   io.resp.valid := cmd.valid && is_cr_read
   io.resp.bits.rd := inst.rd
@@ -138,10 +139,10 @@ class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
   backend.io.dma <> ctrl.io.dma
 
   io.utl <> backend.io.mem
-  io.autl.acquire.valid := Bool(false)
-  io.autl.grant.ready := Bool(false)
+  io.autl.acquire.valid := false.B
+  io.autl.grant.ready := false.B
 
-  io.mem.req.valid := Bool(false)
-  io.mem.invalidate_lr := Bool(false)
+  io.mem.req.valid := false.B
+  io.mem.invalidate_lr := false.B
   io.interrupt := ctrl.io.interrupt
 }

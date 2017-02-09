@@ -1,6 +1,6 @@
 package dma
 
-import Chisel._
+import chisel3._
 import rocket._
 import groundtest._
 import coreplex.WithL2Cache
