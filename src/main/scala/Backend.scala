@@ -583,7 +583,7 @@ class PipelinedDmaTrackerWriter(implicit p: Parameters)
   val dst_byte_off = dst_addr(tlByteAddrBits - 1, 0)
   val bytes_left = Reg(UInt(addrBits.W))
 
-  val dma_req_id = Reg(io.dma.req.bits.xact_id)
+  val dma_req_id = Reg(io.dma.req.bits.xact_id.cloneType)
 
   val s_idle :: s_mem_req :: s_resp :: Nil = Enum(3)
   val state = Reg(init = s_idle)
