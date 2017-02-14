@@ -346,7 +346,7 @@ class ReservationInputIO(implicit p: Parameters) extends ParameterizedBundle()(p
 
 class ReservationOutputIO(implicit val p: Parameters) extends ParameterizedBundle()(p)
     with PipelineUtils {
-  val count = UInt(pipelineCountBits.W)
+  val count = Output(UInt(pipelineCountBits.W))
   val data = Decoupled(new PipelinePacket)
 }
 
