@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.util._
 import rocket.RoCC
 import uncore.tilelink._
+import uncore.agents.CacheName
 import rocket._
 import cde.{Parameters, Field}
 import scala.math.max
@@ -40,6 +41,7 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
     val pause = Output(Bool())
 
     val dma_resp = Flipped(Valid(new ClientDmaResponse))
+    val sg_resp = Flipped(Valid(new ScatterGatherResponse))
     val error = Output(Bool())
   })
 
@@ -67,6 +69,10 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
     regs(RESP_STATUS) := io.dma_resp.bits.status
     regs(RESP_VPN) := io.dma_resp.bits.fault_vpn
   }
+  when (io.sg_resp.valid) {
+    regs(RESP_STATUS) := io.sg_resp.bits.status
+    regs(RESP_VPN) := io.sg_resp.bits.fault_vpn
+  }
 
   io.rdata := regs(io.rwaddr)
   io.error := regs(RESP_STATUS) =/= 0.U
@@ -79,6 +85,7 @@ class DmaController(implicit val p: Parameters) extends Module
     val resp = Decoupled(new RoCCResponse)
     val ptw = new TLBPTWIO
     val dma = new DmaIO
+    val mem = new HellaCacheIO()(p.alterPartial({ case CacheName => "L1D" }))
     val busy = Output(Bool())
     val interrupt = Output(Bool())
   })
@@ -90,19 +97,24 @@ class DmaController(implicit val p: Parameters) extends Module
   val is_cr_write = inst.funct >= 5.U && inst.funct <= 7.U
   val is_cr_set = inst.funct === 6.U
   val is_cr_clear = inst.funct === 7.U
+  val is_sg = inst.funct >= 8.U
 
   val crfile = Module(new DmaCtrlRegFile)
   val frontend = Module(new DmaFrontend)
+  val sgunit = Module(new ScatterGatherUnit(1))
+  val clientArb = Module(new ClientDmaArbiter(2))
 
   crfile.io.rwaddr := cmd.bits.rs1
   crfile.io.wdata := cmd.bits.rs2
   crfile.io.wen := cmd.fire() && is_cr_write
   crfile.io.set := is_cr_set
   crfile.io.clear := is_cr_clear
-  crfile.io.dma_resp <> frontend.io.cpu.resp
+  crfile.io.dma_resp <> clientArb.io.in(0).resp
+  crfile.io.sg_resp <> sgunit.io.cpu.resp
 
-  frontend.io.cpu.req.valid := cmd.valid && is_transfer
-  frontend.io.cpu.req.bits := ClientDmaRequest(
+  clientArb.io.in(0).req.valid := cmd.valid && is_transfer
+  clientArb.io.in(0).req.bits := ClientDmaRequest(
+    client_id = 0.U,
     cmd = cmd.bits.inst.funct,
     src_start = cmd.bits.rs2,
     dst_start = cmd.bits.rs1,
@@ -111,18 +123,36 @@ class DmaController(implicit val p: Parameters) extends Module
     segment_size = crfile.io.segment_size,
     nsegments = crfile.io.nsegments,
     alloc = crfile.io.alloc)
+  clientArb.io.in(1) <> sgunit.io.dma
+
+  frontend.io.cpu <> clientArb.io.out
   frontend.io.pause := crfile.io.pause
 
-  io.ptw <> frontend.io.ptw
+  val tlb = Module(new FrontendTLB(2))
+  tlb.io.clients(0) <> frontend.io.tlb
+  tlb.io.clients(1) <> sgunit.io.tlb
+  io.ptw <> tlb.io.ptw
+
+  sgunit.io.cpu.req.valid := cmd.valid && is_sg
+  sgunit.io.cpu.req.bits := ScatterGatherRequest(
+    cmd = cmd.bits.inst.funct,
+    src_start = cmd.bits.rs2,
+    dst_start = cmd.bits.rs1,
+    segment_size = crfile.io.segment_size,
+    nsegments = crfile.io.nsegments,
+    alloc = crfile.io.alloc)
+
   io.dma <> frontend.io.dma
-  io.busy := cmd.valid || frontend.io.busy
+  io.mem <> sgunit.io.mem
+  io.busy := cmd.valid || frontend.io.busy || sgunit.io.busy
   io.interrupt := false.B
 
   io.resp.valid := cmd.valid && is_cr_read
   io.resp.bits.rd := inst.rd
   io.resp.bits.data := crfile.io.rdata
 
-  cmd.ready := (is_transfer && frontend.io.cpu.req.ready) ||
+  cmd.ready := (is_transfer && clientArb.io.in(0).req.ready) ||
+               (is_sg && sgunit.io.cpu.req.ready) ||
                is_cr_write || // Write can always go through immediately
                (is_cr_read && io.resp.ready)
 }
@@ -142,7 +172,6 @@ class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
   io.autl.acquire.valid := false.B
   io.autl.grant.ready := false.B
 
-  io.mem.req.valid := false.B
-  io.mem.invalidate_lr := false.B
+  io.mem <> ctrl.io.mem
   io.interrupt := ctrl.io.interrupt
 }
