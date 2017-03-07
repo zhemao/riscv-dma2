@@ -128,10 +128,12 @@ class DmaController(implicit val p: Parameters) extends Module
   frontend.io.cpu <> clientArb.io.out
   frontend.io.pause := crfile.io.pause
 
+  val status = RegEnable(cmd.bits.status, cmd.fire() && (is_transfer || is_sg))
   val tlb = Module(new FrontendTLB(2))
   tlb.io.clients(0) <> frontend.io.tlb
   tlb.io.clients(1) <> sgunit.io.tlb
   io.ptw <> tlb.io.ptw
+  tlb.io.ptw.status := status
 
   sgunit.io.cpu.req.valid := cmd.valid && is_sg
   sgunit.io.cpu.req.bits := ScatterGatherRequest(
