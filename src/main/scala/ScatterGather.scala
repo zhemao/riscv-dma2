@@ -97,8 +97,8 @@ class ScatterGatherUnit(client_id: Int)(implicit p: Parameters)
   val segment_size = Reg(UInt(dmaAddrBits.W))
   val alloc = Reg(UInt(2.W))
   val scatter = Reg(Bool())
-  val resp_status = Reg(UInt(width = dmaStatusBits))
-  val fault_vpn = Reg(UInt(width = vpnBits))
+  val resp_status = Reg(UInt(dmaStatusBits.W))
+  val fault_vpn = Reg(UInt(vpnBits.W))
 
   when (io.cpu.req.fire()) {
     val req = io.cpu.req.bits

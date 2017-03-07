@@ -198,9 +198,9 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   val to_translate = Reg(UInt(2.W), init = 0.U)
   val tlb_sent = Reg(UInt(2.W), init = ~0.U(2.W))
   val tlb_to_send = to_translate & ~tlb_sent
-  val resp_status = Reg(UInt(width = dmaStatusBits))
-  val fault_vpn = Reg(UInt(width = vpnBits))
-  val ptw_errors = Reg(init = UInt(0, 2))
+  val resp_status = Reg(UInt(dmaStatusBits.W))
+  val fault_vpn = Reg(UInt(vpnBits.W))
+  val ptw_errors = Reg(init = 0.U(2.W))
 
   io.tlb.req.valid := tlb_to_send.orR
   io.tlb.req.bits.vpn := Mux(tlb_to_send(0), src_vpn, dst_vpn)

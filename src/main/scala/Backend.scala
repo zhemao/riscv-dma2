@@ -153,7 +153,7 @@ class BigBufferDmaTracker(implicit p: Parameters) extends DmaTracker()(p) {
   val (prefetch_id, _) = Counter(prefetch_sent, nDmaTrackerMemXacts)
 
   val base_index = Cat(put_half, put_beat)
-  val put_data = Wire(init = Bits(0, tlDataBits))
+  val put_data = Wire(init = 0.U(tlDataBits.W))
   val beat_align = alignment(blockOffset - 1, tlByteAddrBits)
   val bit_align = Cat(alignment(tlByteAddrBits - 1, 0), 0.U(3.W))
   val rev_align = tlDataBits.U - bit_align

@@ -60,8 +60,8 @@ class DmaTestDriver(implicit val p: Parameters)
   io.mem.req.bits.typ := MT_WU
   io.mem.req.bits.data := test_data
   io.mem.req.bits.tag := 0.U
-  io.mem.req.bits.phys := Bool(false)
-  io.mem.invalidate_lr := Bool(false)
+  io.mem.req.bits.phys := false.B
+  io.mem.invalidate_lr := false.B
 
   io.dma.req.valid := (state === s_dma_req)
   io.dma.req.bits := ClientDmaRequest(
@@ -133,13 +133,13 @@ class DmaTest(implicit p: Parameters) extends GroundTest()(p)
   io.mem <> backend.io.mem
   io.cache.head <> driver.io.mem
   io.status.finished := driver.io.finished
-  io.status.timeout.valid := Bool(false)
-  io.status.error.valid := Bool(false)
+  io.status.timeout.valid := false.B
+  io.status.error.valid := false.B
 
   driver.io.busy := frontend.io.busy
   frontend.io.cpu <> driver.io.dma
   backend.io.dma <> frontend.io.dma
-  frontend.io.pause := Bool(false)
+  frontend.io.pause := false.B
   tlb.io.clients(0) <> frontend.io.tlb
 
   val timer = Module(new Timer(5000, p(NDmaXacts)))
