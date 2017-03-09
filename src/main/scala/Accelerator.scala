@@ -147,7 +147,7 @@ class DmaController(implicit val p: Parameters) extends Module
   io.dma <> frontend.io.dma
   io.mem <> sgunit.io.mem
   io.busy := cmd.valid || frontend.io.busy || sgunit.io.busy
-  io.mem.invalidate_lr := Bool(false)
+  io.mem.invalidate_lr := false.B
   io.interrupt := false.B
 
   io.resp.valid := cmd.valid && is_cr_read
