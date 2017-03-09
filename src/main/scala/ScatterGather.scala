@@ -163,6 +163,7 @@ class ScatterGatherUnit(client_id: Int)(implicit p: Parameters)
   io.mem.req.bits.addr := tab_paddr
   io.mem.req.bits.cmd := M_XRD
   io.mem.req.bits.typ := MT_D
+  io.mem.req.bits.phys := Bool(true)
 
   when (io.mem.req.fire()) {
     dma_roq(dma_roq_head) := ClientDmaRequest(
