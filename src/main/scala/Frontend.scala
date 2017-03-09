@@ -284,6 +284,8 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
   }
 
   when (state === s_translate && !to_translate.orR) {
+    last_src_vpn := src_vpn
+    last_dst_vpn := dst_vpn
     state := Mux(ptw_errors.orR, s_finish, s_dma_req)
   }
 
@@ -308,8 +310,6 @@ class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
         resp_status := NO_ERROR
         state := s_finish
       } .otherwise {
-        last_src_vpn := src_vpn
-        last_dst_vpn := dst_vpn
         src_vaddr := src_vaddr + Mux(adv_ptr(0), src_stride, 0.U)
         dst_vaddr := dst_vaddr + Mux(adv_ptr(1), dst_stride, 0.U)
         bytes_left := segment_size
