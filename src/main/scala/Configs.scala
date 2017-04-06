@@ -29,6 +29,11 @@ class WithDma extends Config(
     case RoccMaxTaggedMemXacts => 3 * site(NDmaTrackerMemXacts)
     case DmaTrackerPipelineDepth => 16
     case BuildDmaTracker => (p: Parameters) => Module(new PipelinedDmaTracker()(p))
+    case TLKey("DMA") => {
+      val oldKey = site(TLKey("L1toL2"))
+      val newBeats = oldKey.dataBits / 64
+      oldKey.copy(dataBeats = newBeats)
+    }
     case SimMemLatency => 20
     case _ => throw new CDEMatchError
   })

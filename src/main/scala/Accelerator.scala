@@ -5,6 +5,7 @@ import chisel3.util._
 import rocket.RoCC
 import uncore.tilelink._
 import uncore.agents.CacheName
+import uncore.converters.TileLinkWidthAdapter
 import rocket._
 import cde.{Parameters, Field}
 import scala.math.max
@@ -161,8 +162,9 @@ class DmaController(implicit val p: Parameters) extends Module
 }
 
 class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
+  val dmaParams = p.alterPartial({ case TLId => "DMA" })
   val ctrl = Module(new DmaController)
-  val backend = Module(new DmaBackend)
+  val backend = Module(new DmaBackend()(dmaParams))
 
   ctrl.io.cmd <> io.cmd
   io.resp <> ctrl.io.resp
@@ -171,6 +173,9 @@ class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
 
   backend.io.dma <> ctrl.io.dma
 
+  io.utl.zip(backend.io.mem).foreach { case (utl, mem) =>
+    TileLinkWidthAdapter(utl, mem)
+  }
   io.utl <> backend.io.mem
   io.autl.acquire.valid := false.B
   io.autl.grant.ready := false.B
