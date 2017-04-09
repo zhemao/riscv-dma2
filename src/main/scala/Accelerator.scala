@@ -176,7 +176,6 @@ class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
   io.utl.zip(backend.io.mem).foreach { case (utl, mem) =>
     TileLinkWidthAdapter(utl, mem)
   }
-  io.utl <> backend.io.mem
   io.autl.acquire.valid := false.B
   io.autl.grant.ready := false.B
 
