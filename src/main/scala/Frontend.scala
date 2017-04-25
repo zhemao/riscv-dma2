@@ -3,11 +3,13 @@ package dma
 import chisel3._
 import chisel3.util._
 import uncore.tilelink._
+import uncore.tilelink2.TLEdgeOut
 import uncore.agents._
 import uncore.util._
 import _root_.util._
+import tile._
 import rocket._
-import cde.Parameters
+import config.Parameters
 import DmaRequest._
 
 trait HasClientDmaParameters extends HasCoreParameters with HasDmaParameters {
@@ -119,16 +121,15 @@ class FrontendTLBIO(implicit p: Parameters) extends ParameterizedBundle()(p) {
   val flush = Output(Bool())
 }
 
-class FrontendTLB(nClients: Int)(implicit p: Parameters) extends Module {
+class FrontendTLB(nClients: Int, nEntries: Int)
+    (implicit edge: TLEdgeOut, p: Parameters) extends Module {
   val io = IO(new Bundle {
     val clients = Flipped(Vec(nClients, new FrontendTLBIO))
     val ptw = new TLBPTWIO
   })
 
   val tlbArb = Module(new InOrderArbiter(new TLBReq, new TLBResp, nClients))
-  val tlb = Module(new DecoupledTLB()(p.alterPartial({
-    case CacheName => "L1D"
-  })))
+  val tlb = Module(new DecoupledTLB(nEntries))
   tlb.io.req <> tlbArb.io.out_req
   tlbArb.io.out_resp <> tlb.io.resp
   io.ptw <> tlb.io.ptw
@@ -140,7 +141,8 @@ class FrontendTLB(nClients: Int)(implicit p: Parameters) extends Module {
   }
 }
 
-class DmaFrontend(implicit p: Parameters) extends CoreModule()(p)
+class DmaFrontend(implicit edge: TLEdgeOut, p: Parameters)
+    extends CoreModule()(p)
     with HasClientDmaParameters with HasTileLinkParameters {
   val io = IO(new Bundle {
     val cpu = Flipped(new ClientDmaIO)

@@ -1,13 +1,11 @@
 package dma
 
 import Chisel._
-import cde.Parameters
+import config.Parameters
 
-class TestHarness(q: Parameters) extends rocketchip.TestHarness(q)
+class TestHarness(implicit p: Parameters) extends rocketchip.TestHarness
 
 object Generator extends util.GeneratorApp {
   val longName = names.topModuleProject + "." + names.configs
   generateFirrtl
-  generateTestSuiteMakefrags // TODO: Needed only for legacy make targets
-  generateParameterDump // TODO: Needed only for legacy make targets
 }

@@ -2,12 +2,11 @@ package dma
 
 import chisel3._
 import chisel3.util._
-import cde.{Parameters, Field}
-import junctions._
-import junctions.NastiConstants._
+import config.{Parameters, Field}
 import _root_.util._
 import uncore.tilelink._
 import uncore.util._
+import rocket.PAddrBits
 
 case object NDmaTrackers extends Field[Int]
 case object NDmaXacts extends Field[Int]

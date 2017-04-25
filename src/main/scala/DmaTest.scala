@@ -3,14 +3,14 @@ package dma
 import chisel3._
 import chisel3.util._
 import groundtest._
-import rocket.{TLBPTWIO, HasCoreParameters}
 import uncore.tilelink._
-import uncore.agents.CacheBlockBytes
+import uncore.tilelink2.TLEdgeOut
 import uncore.constants._
 import _root_.util._
-import junctions.PAddrBits
 import rocket._
-import cde.{Parameters, Field}
+import tile._
+import config.{Parameters, Field}
+import coreplex.CacheBlockBytes
 
 case class DmaTestParameters(
   val src_start: BigInt,
@@ -57,7 +57,7 @@ class DmaTestDriver(implicit val p: Parameters)
   io.mem.req.valid := state.isOneOf(s_put_req, s_get_req)
   io.mem.req.bits.addr := segment_base + Cat(word_cnt, 0.U(2.W))
   io.mem.req.bits.cmd := Mux(state === s_put_req, M_XWR, M_XRD)
-  io.mem.req.bits.typ := MT_WU
+  io.mem.req.bits.typ := rocket.MT_WU
   io.mem.req.bits.data := test_data
   io.mem.req.bits.tag := 0.U
   io.mem.req.bits.phys := false.B
@@ -117,13 +117,14 @@ class DmaTestDriver(implicit val p: Parameters)
          "DmaTest: get data does not match")
 }
 
-class DmaTest(implicit p: Parameters) extends GroundTest()(p)
+class DmaTest(implicit edge: TLEdgeOut, p: Parameters)
+    extends GroundTest()(p)
     with HasCoreParameters {
   val pageBlocks = (1 << pgIdxBits) / p(CacheBlockBytes)
   val driver = Module(new DmaTestDriver)
   val frontend = Module(new DmaFrontend)
   val backend = Module(new DmaBackend)
-  val tlb = Module(new FrontendTLB(1))
+  val tlb = Module(new FrontendTLB(1, 8))
 
   require(io.ptw.size == 1)
   require(io.mem.size == backend.io.mem.size)

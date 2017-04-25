@@ -5,9 +5,10 @@ import chisel3.util._
 import uncore.tilelink._
 import uncore.agents._
 import uncore.constants._
+import tile._
 import rocket._
 import _root_.util._
-import cde.Parameters
+import config.Parameters
 
 import DmaRequest._
 import ClientDmaRequest._
@@ -73,7 +74,7 @@ class ScatterGatherUnit(client_id: Int)(implicit p: Parameters)
     val cpu = Flipped(new ScatterGatherIO)
     val dma = new ClientDmaIO
     val tlb = new FrontendTLBIO
-    val mem = new HellaCacheIO()(p.alterPartial({ case CacheName => "L1D" }))
+    val mem = new HellaCacheIO()
     val busy = Output(Bool())
   })
 
@@ -162,7 +163,7 @@ class ScatterGatherUnit(client_id: Int)(implicit p: Parameters)
   io.mem.req.bits.tag := dma_roq_head
   io.mem.req.bits.addr := tab_paddr
   io.mem.req.bits.cmd := M_XRD
-  io.mem.req.bits.typ := MT_D
+  io.mem.req.bits.typ := rocket.MT_D
   io.mem.req.bits.phys := true.B
 
   when (io.mem.req.fire()) {

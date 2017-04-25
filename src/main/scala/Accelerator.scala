@@ -2,12 +2,12 @@ package dma
 
 import chisel3._
 import chisel3.util._
-import rocket.RoCC
-import uncore.tilelink._
-import uncore.agents.CacheName
-import uncore.converters.TileLinkWidthAdapter
+import tile._
 import rocket._
-import cde.{Parameters, Field}
+import uncore.tilelink._
+import uncore.tilelink2.TLEdgeOut
+import uncore.converters.TileLinkWidthAdapter
+import config.{Parameters, Field}
 import scala.math.max
 
 object DmaCtrlRegNumbers {
@@ -79,14 +79,14 @@ class DmaCtrlRegFile(implicit val p: Parameters) extends Module
   io.error := regs(RESP_STATUS) =/= 0.U
 }
 
-class DmaController(implicit val p: Parameters) extends Module
-    with HasClientDmaParameters {
+class DmaController(implicit edge: TLEdgeOut, val p: Parameters)
+    extends Module with HasClientDmaParameters {
   val io = IO(new Bundle {
     val cmd = Flipped(Decoupled(new RoCCCommand))
     val resp = Decoupled(new RoCCResponse)
     val ptw = new TLBPTWIO
     val dma = new DmaIO
-    val mem = new HellaCacheIO()(p.alterPartial({ case CacheName => "L1D" }))
+    val mem = new HellaCacheIO
     val busy = Output(Bool())
     val interrupt = Output(Bool())
   })
@@ -130,7 +130,7 @@ class DmaController(implicit val p: Parameters) extends Module
   frontend.io.pause := crfile.io.pause
 
   val status = RegEnable(cmd.bits.status, cmd.fire() && (is_transfer || is_sg))
-  val tlb = Module(new FrontendTLB(2))
+  val tlb = Module(new FrontendTLB(2, 8))
   tlb.io.clients(0) <> frontend.io.tlb
   tlb.io.clients(1) <> sgunit.io.tlb
   io.ptw <> tlb.io.ptw
@@ -161,7 +161,8 @@ class DmaController(implicit val p: Parameters) extends Module
                (is_cr_read && io.resp.ready)
 }
 
-class CopyAccelerator(implicit p: Parameters) extends RoCC()(p) {
+class CopyAccelerator(implicit edge: TLEdgeOut, p: Parameters)
+    extends RoCC()(p) {
   val dmaParams = p.alterPartial({ case TLId => "DMA" })
   val ctrl = Module(new DmaController)
   val backend = Module(new DmaBackend()(dmaParams))
